@@ -1,0 +1,27 @@
+# Gradle files
+.gradle/
+build/
+app/build/
+
+# Local configuration files
+local.properties
+
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+.navigation/
+
+# Native build artifacts
+.cxx/
+*.o
+*.so
+*.exe
+test_ring_buffer_bin
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Output artifacts
+*.apk
+*.aab
