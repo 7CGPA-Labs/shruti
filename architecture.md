@@ -8,7 +8,8 @@
 * **Target Package:** `org.seven_cgpalabs.shruti`
 * **Target OS:** Android 14.0 (API 34), Android 15.0 (API 35)
 * **Hardware Tier:** Tier-1 & Tier-2 NPU SoCs (Snapdragon 8 Gen 2/3/4, MediaTek Dimensity 9200/9300/9400)
-* **Document Version:** 2.2.0 (3-Action Incoming Call UI Specification)
+* **S2S SLM Model:** `Llama-3.2-1B-Audio-Instruct` (INT4 AWQ)
+* **Document Version:** 2.3.0 (Llama-3.2-1B-Audio-Instruct Model Specification)
 * **Status:** Approved System Architecture
 
 ---
@@ -57,7 +58,7 @@
 |   |   +-------------------------------------------------------------------------+   |   |
 |   |   | Qualcomm QNN / HTP / NNAPI NPU Subsystem                                |   |   |
 |   |   | - Neural Acoustic Codec Encoder (Mimi/WavTokenizer, INT8, 50Hz)         |   |   |
-|   |   | - Native Audio-to-Audio SLM (1B S2S SLM, Enforces Mandatory AI Disclosure)|   |   |
+|   |   | - Llama-3.2-1B-Audio-Instruct S2S SLM (INT4 AWQ, Mandatory AI Disclosure)|   |   |
 |   |   | - Neural Acoustic Codec Decoder (Synthesis to 16kHz PCM)                |   |   |
 |   |   | - Non-Invertible Semantic Vector Projector (WavLM/CLAP, 512-d Float32)  |   |   |
 |   |   +------------------------------------+------------------------------------+   |   |
@@ -82,36 +83,25 @@
 
 ---
 
-### 3. Sequence Flow: User Taps "Screen with S.H.R.U.T.I. AI"
+### 3. Subsystem Breakdown & Component Contracts
 
-```
-Caller (PSTN)      InCallService UI         ShrutiBridge          Native RingBuffer        NPU S2S Engine         Gemini Overlay UI
-     │                    │                      │                      │                        │                        │
-     │── Incoming Call ──>│                      │                      │                        │                        │
-     │                    │── Displays 3-Action  │                      │                        │                        │
-     │                    │   [Decline][Answer]  │                      │                        │                        │
-     │                    │   [Screen AI]        │                      │                        │                        │
-     │                    │                      │                      │                        │                        │
-     │                    │── User Taps ────────>│                      │                        │                        │
-     │                    │   "Screen AI"        │── Accept Call ──────>│                        │                        │
-     │                    │                      │                      │                        │── Launch Overlay ─────>│
-     │<── Connected ──────│                      │                      │                        │   Acoustic Orbit       │
-     │                    │                      │                      │                        │                        │
-     │                    │                      │                      │                        │── Turn 1 Disclosure ──>│
-     │                    │<── Play Disclosure ─────────────────────────│                        │   ("I am an automated  │
-     │<── Audio Disclosure│                      │                      │                        │    assistant...")      │
-     │                    │                      │                      │                        │                        │
-     │── Caller Reply ───>│── WebRTC RTP Frames ───────────────────────>│                        │                        │
-     │   ("Is this Mr. X? │                      │                      │── 32ms Chunks ────────>│                        │
-     │    Delivery here") │                      │                      │                        │                        │
-     │                    │                      │                      │                        │── Silero VAD (CPU)     │
-     │                    │                      │                      │                        │   Speech Detected      │
-     │                    │                      │                      │                        │                        │
-     │                    │                      │                      │                        │── Codec Encode (NPU)   │
-     │                    │                      │                      │                        │── S2S SLM (NPU)        │
-     │                    │                      │                      │                        │── Codec Decode (NPU)   │
-     │                    │                      │                      │<── Synthesized PCM ────│                        │
-     │                    │                      │                      │    ("Yes, drop at gate")                        │
-     │                    │<── Playback Frames ─────────────────────────│                        │                        │
-     │<── Audio Output ───│                      │                      │                        │                        │
-```
+#### 3.1 On-Device ML Engine (`org.seven_cgpalabs.shruti.core`)
+* **`Llama-3.2-1B-Audio-Instruct` (INT4 AWQ):** Autoregressive S2S SLM execution engine running on QNN HTP NPU / NNAPI.
+* **System Prompt Contract:** Forces mandatory Turn 1 AI synthetic media disclosure greeting:
+  `"I am an automated voice assistant screening this call for [User Name]. Please state the reason for your call."`
+
+---
+
+### 4. Latency Budget Analysis
+
+| Pipeline Stage | Implementation Detail | Processing Time | Cumulative Latency |
+| :--- | :--- | :--- | :--- |
+| **VAD Trailing Silence Window** | Silero VAD boundary detection | 180 ms | 180 ms |
+| **WebRTC OPUS Ingestion & Jitter** | LiveKit OPUS decode | 20 ms | 200 ms |
+| **Ring Buffer Enqueue** | Lockless atomic copy | 2 ms | 202 ms |
+| **Neural Codec Encoding (QNN HTP)** | Mimi INT8 Encoder | 12 ms | 214 ms |
+| **Llama-3.2-1B-Audio Prefill & 1st Token** | INT4 AWQ execution on QNN HTP NPU | 75 ms | 289 ms |
+| **Neural Codec Decoding (QNN HTP)** | Mimi INT8 Decoder | 15 ms | 304 ms |
+| **Ring Buffer Dequeue & Uplink** | Atomic pop to LiveKit sink | 2 ms | 306 ms |
+| **WebRTC Outbound OPUS Encoding** | OPUS encode + packetization | 15 ms | 321 ms |
+| **PSTN Carrier Gateway Transit** | Carrier network transit | 45 ms | **366 ms** |
