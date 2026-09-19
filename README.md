@@ -148,7 +148,6 @@ Ensure Android NDK `r26c` and CMake `3.22.1` are installed in your Android SDK e
 - [UI/UX Design Specification](ui_design.md)
 - [Backend & System Schema Specification](backend_schema.md)
 - [Regulatory & Store Restrictions Analysis](restriction.md)
-- [Milestone 1 Implementation Plan](implementation_plan_milestone_1.md)
 
 ---
 
