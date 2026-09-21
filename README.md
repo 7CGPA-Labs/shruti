@@ -13,13 +13,13 @@
 
 > **Etymology & Philosophy**  
 > In classical Sanskrit, ***Śruti*** (श्रुति) signifies *"that which is heard"*—knowledge transmitted directly through acoustic perception without written mediation.  
-> **S.H.R.U.T.I.** (Wake-Word: `"Hey Shruti"`) mirrors this philosophy as an on-device, zero-text, audio-native telephony assistant. Powered by **`Llama-3.2-1B-Audio-Instruct` (INT4 AWQ)**, it eliminates cascading Speech-to-Text (STT) $\rightarrow$ LLM $\rightarrow$ Text-to-Speech (TTS) pipelines in favor of direct Speech-to-Speech (S2S) discrete token inference executed entirely on local mobile NPU silicon.
+> **S.H.R.U.T.I.** (Wake-Word: `"Hey Shruti"`) mirrors this philosophy as an on-device, zero-text, audio-native telephony assistant. Powered by **`Qwen3-Omni-3B` (INT4 AWQ)**, it eliminates cascading Speech-to-Text (STT) $\rightarrow$ LLM $\rightarrow$ Text-to-Speech (TTS) pipelines in favor of direct Speech-to-Speech (S2S) discrete token inference executed entirely on local mobile NPU silicon.
 
 ---
 
 ## Key Highlights
 
-- **Pure Speech-to-Speech Architecture ($\le 380\text{ ms}$ Turnaround):** Ingests raw 16 kHz PCM directly into neural acoustic codecs (Mimi / WavTokenizer), streams discrete tokens into `Llama-3.2-1B-Audio-Instruct` (INT4 AWQ), and reconstructs synthesized speech without generating intermediate text tokens.
+- **Pure Speech-to-Speech Architecture ($\le 380\text{ ms}$ Turnaround):** Ingests raw 16 kHz PCM directly into neural acoustic codecs (Mimi / WavTokenizer), streams discrete tokens into `Qwen3-Omni-3B` (INT4 AWQ), and reconstructs synthesized speech without generating intermediate text tokens.
 - **3-Action Incoming Call UI:** Provides three explicit user action controls on incoming calls: `[Decline]`, `[Answer]`, and `[Screen with S.H.R.U.T.I. AI]`.
 - **Google Play & DoT Policy Compliant:**
   - **Human-in-the-Loop 1909 Intent:** Pre-filled `Intent.ACTION_SENDTO` (`smsto:1909`) for single-tap user SMS confirmation (Play Store `SEND_SMS` policy compliant).
@@ -64,7 +64,7 @@
                                                                           │
                                                                           ▼
                                                           ┌───────────────────────────────┐
-                                                          │ Llama-3.2-1B S2S (HTP NPU)    │
+                                                          │ Qwen3-Omni-3B S2S (HTP NPU)    │
                                                           │ * INT4 AWQ Autoregressive     │
                                                           │ * Mandatory AI Disclosure     │
                                                           └───────────────┬───────────────┘
@@ -137,6 +137,8 @@ Ensure Android NDK `r26c` and CMake `3.22.1` are installed in your Android SDK e
 ./gradlew assembleDebug
 ```
 
+- **Long Multi-Person Conversation & Vector Trajectory Architecture:** Supports 10 to 60+ minute multi-speaker meetings/conversations via CAM++ ONNX speaker diarization, streaming 30-second chunk-and-flush KV-cache management (constant ~450 MB RAM), and Vector Trajectory Matrix ($\mathbf{M}_{\text{session}} \in \mathbb{R}^{K \times 512}$) storage in SQLCipher.
+
 ---
 
 ## Documentation Index
@@ -144,6 +146,7 @@ Ensure Android NDK `r26c` and CMake `3.22.1` are installed in your Android SDK e
 - [Product Requirements Document (PRD)](PRD.md)
 - [Technical Requirements Document (TRD)](TRD.md)
 - [System Architecture Specification](architecture.md)
+- [Model Training & Surgery Plan](TRAINING_PLAN.md)
 - [Implementation Roadmap & Milestones](milestone_tasks.md)
 - [UI/UX Design Specification](ui_design.md)
 - [Backend & System Schema Specification](backend_schema.md)

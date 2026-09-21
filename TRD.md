@@ -9,7 +9,7 @@
 * **NDK Level:** NDK r26c+ (C++20 standard)
 * **Build System:** Gradle Kotlin DSL (`build.gradle.kts`) + CMake 3.22.1
 * **ML Inference Framework:** ONNX Runtime Mobile v1.19+ with native JNI and C++ APIs
-* **S2S Language Model:** `Llama-3.2-1B-Audio-Instruct` (Quantized via INT4 AWQ)
+* **S2S Language Model:** `Qwen3-Omni-3B` (Quantized via INT4 AWQ)
 * **Hardware Acceleration Backends:**
   * Qualcomm QNN (HTP - Hexagon Tensor Processor) Execution Provider
   * MediaTek NeuroPilot / Android NNAPI Execution Provider
@@ -44,7 +44,7 @@
                                │
                                ▼
           ┌────────────────────────────────────────┐
-          │  Llama-3.2-1B-Audio-Instruct S2S SLM   │
+          │  Qwen3-Omni-3B S2S SLM   │
           │    Quantized INT4 AWQ (QNN HTP NPU)    │
           │    * Enforces Mandatory AI Disclosure  │
           └────────────────────┬───────────────────┘
@@ -70,13 +70,13 @@
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Voice Activity Detector** | Silero VAD v5 | 1.8 M | INT8 | CPU (XNNPACK) | ~2.5 MB | < 2.5 ms / 32ms chunk |
 | **Acoustic Neural Codec** | Mimi / WavTokenizer | 75 M | INT8 | QNN HTP / NNAPI | ~82 MB | < 12 ms / frame |
-| **Speech-to-Speech SLM** | `Llama-3.2-1B-Audio-Instruct` | 1.1 B | INT4 (AWQ) | QNN HTP NPU | ~620 MB | < 25 ms / token |
+| **Speech-to-Speech SLM** | `Qwen3-Omni-3B` | 1.1 B | INT4 (AWQ) | QNN HTP NPU | ~620 MB | < 25 ms / token |
 | **Semantic Vector Encoder** | CLAP / WavLM Latent Head | 45 M | INT8 | QNN / CPU | ~48 MB | < 45 ms / utterance |
 
 #### 2.2 S2S SLM Mandatory AI Disclosure System Prompt Contract
-System prompt contract for `Llama-3.2-1B-Audio-Instruct`:
+System prompt contract for `Qwen3-Omni-3B`:
 ```
-System Prompt: "You are S.H.R.U.T.I., an automated AI voice assistant powered by Llama-3.2-1B-Audio screening a call for [User Name]. Your very first sentence to the caller MUST strictly be: 'I am an automated voice assistant screening this call for [User Name]. Please state the reason for your call.' Do not deviate from this disclosure."
+System Prompt: "You are S.H.R.U.T.I., an automated AI voice assistant powered by Qwen3-Omni-3B screening a call for [User Name]. Your very first sentence to the caller MUST strictly be: 'I am an automated voice assistant screening this call for [User Name]. Please state the reason for your call.' Do not deviate from this disclosure."
 ```
 
 ---
@@ -89,7 +89,7 @@ When `InCallService` signals an incoming ringing state:
 enum class IncomingCallAction {
     DECLINE,                 // Terminates call immediately
     ANSWER,                  // Answers call directly to earpiece/speaker
-    DELEGATE_AI_SCREENER     // Accepts call in AI bridge mode & launches Llama-3.2-1B-Audio screening overlay
+    DELEGATE_AI_SCREENER     // Accepts call in AI bridge mode & launches Qwen3-Omni-3B screening overlay
 }
 ```
 

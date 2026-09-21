@@ -6,7 +6,7 @@
 
 * **Target Package:** `org.seven_cgpalabs.shruti`
 * **Target Platforms:** Android 14.0+ (API 34 & 35)
-* **S2S SLM Engine:** `Llama-3.2-1B-Audio-Instruct` (Quantized via INT4 AWQ)
+* **S2S SLM Engine:** `Qwen3-Omni-3B` (Quantized via INT4 AWQ)
 * **Storage Engine:** SQLCipher v4.5.4 (AES-256-GCM encrypted at rest)
 * **IPC Transport:** Android AIDL / Binder IPC
 * **Native Memory:** C++20 Lockless SPSC Circular Ring Buffer
@@ -21,12 +21,12 @@
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Voice Activity Detector** | Silero VAD v5 | 1.8 M | INT8 ONNX | CPU (XNNPACK / ARM NEON) | ~2.5 MB | < 2.5 ms / 32ms chunk |
 | **Neural Codec Encoder** | Mimi / WavTokenizer | 75 M | INT8 ONNX | Qualcomm QNN HTP / NNAPI | ~82 MB | < 12 ms / frame |
-| **Speech-to-Speech SLM** | `Llama-3.2-1B-Audio-Instruct` | 1.1 B | INT4 AWQ | Qualcomm QNN HTP NPU | ~620 MB | < 25 ms / token |
+| **Speech-to-Speech SLM** | `Qwen3-Omni-3B` | 1.1 B | INT4 AWQ | Qualcomm QNN HTP NPU | ~620 MB | < 25 ms / token |
 | **Neural Codec Decoder** | Mimi / WavTokenizer | 75 M | INT8 ONNX | Qualcomm QNN HTP / NNAPI | ~82 MB | < 15 ms / frame |
 | **Latent Vector Encoder** | CLAP / WavLM Head | 45 M | INT8 ONNX | QNN HTP / CPU Fallback | ~48 MB | < 45 ms / utterance |
 
 *Mandatory AI Disclosure System Prompt Contract:*
-`"I am an automated voice assistant powered by Llama-3.2-1B-Audio screening this call for [User Name]. Please state the reason for your call."`
+`"I am an automated voice assistant powered by Qwen3-Omni-3B screening this call for [User Name]. Please state the reason for your call."`
 
 ---
 
@@ -61,4 +61,21 @@ CREATE TABLE IF NOT EXISTS call_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_timestamp ON call_sessions(timestamp_epoch DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_caller ON call_sessions(caller_hash);
+```
+
+
+---
+
+### Session Vector Trajectory DDL (Long Multi-Person Conversations)
+
+```sql
+-- SQLCipher Encrypted Table for Multi-Vector Trajectory Matrices
+CREATE TABLE IF NOT EXISTS session_trajectory (
+    session_id TEXT PRIMARY KEY,
+    trajectory_blob BLOB NOT NULL,       -- Encrypted K x 512 Float32 Matrix (AES-256-GCM)
+    num_vectors INTEGER NOT NULL,        -- K (Number of 2-minute topic blocks)
+    duration_seconds INTEGER NOT NULL,   -- Total call duration in seconds
+    speaker_count INTEGER NOT NULL,      -- Diarized unique speaker count
+    created_at INTEGER NOT NULL          -- Unix Epoch Timestamp (ms)
+);
 ```
