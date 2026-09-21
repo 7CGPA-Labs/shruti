@@ -64,3 +64,137 @@ The platform operates under a strict **Zero-Text, Zero-Audio Persistence** parad
 #### NFR-1: Turnaround Latency Budgets
 * **NFR-1.1 End-to-End Latency:** Duration between caller speech end and initial AI response frame playback from `Qwen3-Omni-3B` must not exceed **380 ms** on Snapdragon 8 Gen 2+.
 * **NFR-1.2 Memory Footprint:** The `Qwen3-Omni-3B` INT4 AWQ model weight allocation must consume $\le 620\text{ MB}$ of system RAM.
+
+
+
+---
+
+### 6. First-Time Setup & Double-Confirmation (Voice Onboarding)
+
+Because S.H.R.U.T.I. is designed as a zero-text, voice-first system, onboarding is conducted as an interactive spoken calibration session. This accomplishes two things simultaneously: it collects the necessary grounding facts (address, landmarks, delivery rules) and extracts the acoustic baseline for the user's voice so the assistant recognizes the owner during debriefs.
+
+```
+[ User Launches App ] ──► "Namaste! Let's set up S.H.R.U.T.I. Who should I say I am assisting?"
+                                         │
+                                         ▼
+                            [ Step 1: Identity & Name ]
+                                         │
+                                         ▼
+                 [ Step 2: Address Specifics (Tower, Flat, Floor) ]
+                                         │
+                                         ▼
+                 [ Step 3: Navigation Landmarks & Gate Protocol ]
+                                         │
+                                         ▼
+                 [ Step 4: Handover Rules (Guard vs. Doorstep) ]
+                                         │
+                                         ▼
+               [ Step 5: Double-Confirmation Readback & Affirmation ]
+                                         │
+                  User says: "Yes, that's correct" / "Haan, theek hai"
+                                         │
+                                         ▼
+            Compile into Encrypted System Prefix (E_sys)
+```
+
+#### 6.1 The Conversational Setup Script
+
+1. **Owner Identification:**
+   * *Assistant:* "Hello! I am ready to set up your call assistant. First, what name should I use when answering calls for you?"
+   * *User:* "Chandrashekar, or just Gagan."
+
+2. **Detailed Location & Tower/Door:**
+   * *Assistant:* "Got it, Gagan. What is your exact apartment or house location, including building name, tower, and flat number?"
+   * *User:* "Sobha Dream Acres, Tower 14, Flat 804 on the 8th floor."
+
+3. **Wayfinding Landmarks & Gate Policy:**
+   * *Assistant:* "If a delivery driver is entering from the main gate, what landmarks or directions should they follow to find your tower?"
+   * *User:* "Enter through Gate 2 near the clubhouse. Take the second right past the swimming pool. Tower 14 is the yellow building on the left."
+
+4. **Package Handover & Gate Rules:**
+   * *Assistant:* "If you are unavailable, should they leave packages at the main gate security, outside your flat door, or call you directly?"
+   * *User:* "Leave prepaid parcels with the lobby security guard. For cash on delivery or OTP packages, tell them to ring my doorbell."
+
+5. **The Double-Confirmation Turn (The Guardrail):**
+   * *Assistant:* "Let me confirm your details: I am assisting Gagan at Sobha Dream Acres, Tower 14, Flat 804. Directions: Enter Gate 2 near clubhouse, take the second right past the pool to the yellow building. Prepaid deliveries go to lobby security, OTP packages come to the door. Did I get everything right?"
+   * *User:* "Yes, that is correct."
+   * *Assistant:* "Setup complete. S.H.R.U.T.I. is now active and protecting your calls."
+
+#### 6.2 Storage Architecture for Setup Data
+
+Under the **Zero-Persistence / Ciphered Vector** model:
+* **System Prompt Tensor:** The confirmed facts are mapped through the model's text encoder once to produce a static **System Conditioning Embedding Tensor** ($\mathbf{E}_{	ext{sys}} \in \mathbb{R}^{L 	imes 2048}$).
+* **Hardware Encryption:** $\mathbf{E}_{	ext{sys}}$ is encrypted via AES-256-GCM using the Android KeyStore master key and saved as `profile_vector.blob` in SQLCipher.
+* **Deterministic Rules (Fallbacks):** Exact numerical tokens (Flat `804`, Tower `14`, Gate `2`) are stored in an encrypted key-value table so that deterministic values are never subject to neural hallucinations during active calls.
+
+---
+
+### 7. Live Delivery Guidance: How the LLM Navigates the Driver
+
+When a delivery partner (Swiggy, Zomato, Amazon, Blue Dart, Blinkit) calls, they are often riding a two-wheeler, dealing with heavy traffic or wind noise, and speaking rapid, code-mixed Hinglish/regional slang (*"Bhaiyya kahan aana hai?"*, *"Gate pe security entry nahi de raha"*).
+
+The model handles navigation through an **anchored wayfinding state machine** inside the S2S loop.
+
+```
+[ Inbound Call Ringing ]
+          │
+          ▼
+[ Load Profile Prefix E_sys ]  ──► (Tower 14, Flat 804, Gate 2, Clubhouse, Pool)
+          │
+          ▼
+Assistant: "Hello, this is Gagan's assistant. Are you calling regarding a delivery?"
+          │
+          ▼
+Driver: "Haan bhaiyya, main society gate pe hoon, location nahi samajh aa raha."
+          │
+          ▼
+[ State 1: Gate Localization ]
+Assistant: "Aap kaunse gate pe khade ho? Gate 1 ya Gate 2?"
+          │
+          ▼
+Driver: "Gate 1 pe hoon."
+          │
+          ▼
+[ State 2: Turn-by-Turn Wayfinding ]
+Assistant: "Theek hai. Gate 1 se seedha aaiye, clubhouse cross karke right lijiye.
+            Aage swimming pool aayega, uske paas Tower 14 yellow building hai."
+          │
+          ▼
+Driver: "Lift se kaunse floor aana hai?"
+          │
+          ▼
+[ State 3: Final Mile Delivery ]
+Assistant: "8th floor, Flat 804. Agar prepaid packet hai toh lobby guard ke paas
+            bhi drop kar sakte ho."
+          │
+          ▼
+Driver: "Theek hai bhaiyya, guard ko de raha hoon."
+          │
+          ▼
+[ Call Terminates ] ──► Extract 512-d intent vector ──► Encrypt to SQLCipher ──► Wipe RAM
+```
+
+#### 7.1 Key Engineering Pillars for Navigation Handling
+
+1. **Atomic, Single-Instruction Pacing:** Delivery agents cannot process long paragraphs over noisy cellular audio. The model's fine-tuned screening persona is constrained to deliver **one or two landmark instructions per turn**:
+   * *Ineffective:* "Enter Gate 2, take second right past the pool, then left at the clubhouse, find Tower 14, take lift to 8th floor Flat 804."
+   * *S.H.R.U.T.I. Pattern:* "Gate 2 se enter karke pool ke paas second right lijiye. Wahan Tower 14 milega." (Waits for driver acknowledgement before giving flat/floor info).
+
+2. **Native Code-Switching & Dialect Grounding:** The model does not force the driver into formal speech. If the driver asks in Kannada (*"Sir, address sigtha illa, elli barbeku?"*), the Whisper encoder extracts the semantic meaning, and the Qwen backbone paired with regional prosody tokens guides them in Kannada:
+   * *"Gate 2 inda olage banni, swimming pool pakka Tower 14 ide, Flat 804."*
+
+3. **Low-Latency Interruption (Barge-In) During Directions:** Drivers constantly interrupt mid-sentence when spotting a landmark or talking to security:
+   * *Assistant:* "Aap seedha aakar round-about se right—"
+   * *Driver (Interrupts):* "Haan haan, clubhouse dikh gaya mujhe!"
+   * *Execution:* Silero VAD flags driver speech in $<32	ext{ ms}$, the native C++ ring buffer drops the remaining direction audio via `memset_s`, the KV-cache truncates the unplayed tokens, and the assistant instantly responds to the update: *"Haan, clubhouse ke bagal wala building hi Tower 14 hai."*
+
+4. **The "Security Guard Intercom" Sub-Routine:** If the driver states that security is refusing entry:
+   * *Driver:* "Security gate pass mang raha hai / register mein entry chahiye."
+   * *Assistant:* "Security ko boliye Flat 804, Tower 14 mein Gagan ke yahan delivery hai. Entry approve karwayenge."
+
+5. **Escalation & Call Bridging (Safety Net):** The assistant does not trap callers in an endless loop. If an edge case occurs, the model breaks out and alerts the owner:
+   * **Escalation Triggers:**
+     * Driver asks for an OTP (Cash on Delivery / high-value parcel).
+     * Driver cannot find the tower after 3 turns.
+     * Driver explicitly demands: *"User se baat karao / call transfer karo."*
+   * **Action:** The assistant states: *"Main Gagan ko direct ring connect kar raha hoon, ek second hold kijiye."* The app triggers an urgent high-priority heads-up notification on the phone, breaking through DND to bridge the call to the handset speaker.
