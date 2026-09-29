@@ -19,18 +19,18 @@
 
 ## Key Highlights
 
-- **Pure Speech-to-Speech Architecture ($\le 380\text{ ms}$ Turnaround):** Ingests raw 16 kHz PCM directly into neural acoustic codecs (Mimi / WavTokenizer), streams discrete tokens into `Qwen3-Omni-3B` (INT4 AWQ), and reconstructs synthesized speech without generating intermediate text tokens.
-- **3-Action Incoming Call UI:** Provides three explicit user action controls on incoming calls: `[Decline]`, `[Answer]`, and `[Screen with S.H.R.U.T.I. AI]`.
+- **Passive In-Call & Ambient Voice Vectorizer:** Operates strictly as a zero-touch passive listener during calls and ambient meetings. The AI never interrupts, intercepts, or converses with callers live; incoming calls use the standard default dialer `[Decline]` / `[Answer]`.
+- **LiteRT Tri-Tier Hardware Execution Pipeline:**
+  - **Tier 1 (NPU - Snapdragon HTP / MTK APU):** INT8 QAT Dual-Head Vectorizer extracts 192-d speaker identity ($e_{\text{speaker}}$) and 64-d prosody/energy dynamics ($z_{\text{prosody}}$) in $< 1.8\text{ ms}$ with static tensor allocation (`1, 50, 80`).
+  - **Tier 2 (GPU - Qualcomm Adreno / ARM Mali via OpenCL):** Streaming Whisper / SLM semantic encoder extracting 128-d semantic intent ($w_{\text{semantic}}$) + 1-d pause delta ($\Delta_{\text{pause}}$) in $< 18\text{ ms}$.
+  - **Tier 3 (CPU - ARM NEON / XNNPACK):** Silero VAD v5 ($< 2.5\text{ ms}$) and lock-free C++ DSP ring buffer.
+- **Post-Call Expressive Storytelling / Spoken Debrief:** Transforms on-device vector streams into expressive spoken summaries with speaker attribution, dynamic prosody (SSML), and conversational brevity on demand once calls or ambient sessions conclude.
 - **Google Play & DoT Policy Compliant:**
   - **Human-in-the-Loop 1909 Intent:** Pre-filled `Intent.ACTION_SENDTO` (`smsto:1909`) for single-tap user SMS confirmation (Play Store `SEND_SMS` policy compliant).
   - **`ROLE_DIALER` Emergency Routing:** Complete dialer client with instant zero-latency pass-through for Emergency numbers (`112` / `911`).
-  - **Mandatory AI Disclosure:** System prompt enforces Turn 1 disclosure (*"I am an automated voice assistant screening this call for [User Name]..."*).
-  - **DoT Interconnect Compliance:** Carrier SIP trunks terminate via licensed Indian Telecom Service Providers (TSPs).
+  - **Zero Caller-Impersonation Risk:** The AI is strictly passive on calls; assistant persona is transparently established during first-time voice onboarding.
 - **Zero-Persistence Privacy Invariant:** No raw audio (`.wav`, `.pcm`, `.mp3`) and no textual transcripts are ever written to flash storage. Volatile RAM buffers are aggressively scrubbed using `memset_s`.
-- **Non-Invertible Latent Storage:** Historical conversation context is stored exclusively as 512-dimensional continuous unit vectors ($\mathbf{v} \in \mathbb{S}^{511}$) in an encrypted SQLCipher database.
-- **Heterogeneous Silicon Allocation:** 
-  - **CPU (ARM NEON):** Silero VAD v5 (32 ms window) operates at $< 2.5\text{ ms}$ latency without waking the NPU or draining standby power.
-  - **NPU (Qualcomm QNN HTP / Android NNAPI):** Accelerates neural codec encoders/decoders and the 1B INT4 S2S model.
+- **Memory-Mapped FlatBuffers `.vecstream`:** High-speed, zero-copy composite vector stream storage ($v_t \in \mathbb{R}^{384}$) encrypted at rest via AES-256-GCM.
 
 ---
 
@@ -38,7 +38,7 @@
 
 ```
                   ┌──────────────────────────────────────────────┐
-                  │          Inbound Cellular / SIP Call         │
+                  │          Inbound PSTN / Cellular Call        │
                   └──────────────────────┬───────────────────────┘
                                          │
                          ┌───────────────┴───────────────┐
@@ -46,10 +46,10 @@
                          └───────┬───────────────┬───────┘
                      Matches 140 │               │ Pass / Unknown / 160
                                  ▼               ▼
-                       [ Instant Drop ]    [ 3-Action Caller Screen UI ]
-                                           [Decline] [Answer] [Screen AI]
+                       [ Instant Drop ]    [ Default Dialer UI ]
+                                           [Decline]   [Answer]
                                                  │
-                                                 ▼
+                                                 ▼ (User Answers - Passive Mode)
                                    ┌───────────────────────────┐
                                    │ Lockless SPSC Ring Buffer │
                                    │ (AudioRingBuffer.cpp)     │
@@ -58,30 +58,36 @@
                         ┌────────────────────────┴────────────────────────┐
                         ▼                                                 ▼
         ┌───────────────────────────────┐                 ┌───────────────────────────────┐
-        │  Silero VAD (CPU / ARM NEON)  │                 │ Mimi Codec Encoder (HTP NPU)  │
-        │  * Barge-in detection (<40ms) │                 │ * 50Hz Discrete Tokens        │
+        │  Silero VAD (CPU / ARM NEON)  │                 │ LiteRT NPU Dual-Head Vector   │
+        │  * Speech chunking (<2.5ms)   │                 │ * 192-d Speaker + 64-d Prosody│
         └───────────────────────────────┘                 └───────────────┬───────────────┘
                                                                           │
                                                                           ▼
                                                           ┌───────────────────────────────┐
-                                                          │ Qwen3-Omni-3B S2S (HTP NPU)    │
-                                                          │ * INT4 AWQ Autoregressive     │
-                                                          │ * Mandatory AI Disclosure     │
+                                                          │ LiteRT GPU (OpenCL) Whisper   │
+                                                          │ * 128-d Semantic + 1-d Pause  │
                                                           └───────────────┬───────────────┘
                                                                           │
                                                                           ▼
                                                           ┌───────────────────────────────┐
-                                                          │ Mimi Codec Decoder (HTP NPU)  │
-                                                          │ * Synthesizes 16kHz PCM       │
+                                                          │ FlatBuffers .vecstream Serial │
+                                                          │ * Composite vt in R^384       │
                                                           └───────────────┬───────────────┘
                                                                           │
-                                    ┌─────────────────────────────────────┴─┐
-                                    ▼                                       ▼
-                     [ Outbound LiveKit Audio Sink ]         [ Non-Invertible Projection ]
-                                                                            │ 512-d Latent Vector
-                                                                            ▼
-                                                             [ SQLCipher AES-256 Storage ]
-                                                             * Volatile RAM scrubbed (memset_s)
+                                                                          ▼
+                                                          ┌───────────────────────────────┐
+                                                          │ SQLCipher AES-256 Storage     │
+                                                          │ * Volatile RAM scrub (memset) │
+                                                          └───────────────┬───────────────┘
+                                                                          │
+                                              (Post-Call User Query / Hero Orbit Tap)
+                                                                          │
+                                                                          ▼
+                                                          ┌───────────────────────────────┐
+                                                          │ Expressive SLM Debrief Engine │
+                                                          │ * Qwen3-Omni-3B / SSML Prosody│
+                                                          │ * Spoken Story & Key Insights │
+                                                          └───────────────────────────────┘
 ```
 
 ---
@@ -90,14 +96,16 @@
 
 ```
 shruti/
- ├── PRD.md                            # Product Requirements Document
+ ├── PRD.md                            # Product Requirements Document (v3.0.0)
  ├── TRD.md                            # Technical Requirements Document
- ├── architecture.md                   # System Architecture Specification
+ ├── architecture.md                   # System Architecture Specification (v3.0.0)
+ ├── notebooks/
+ │    └── dual_head_vectorizer_qat.ipynb# LiteRT INT8 QAT Export & Benchmarks
  ├── milestone_tasks.md                # 16-Sprint Implementation Roadmap
- ├── ui_design.md                      # Gemini-Style UI/UX & 3-Action Caller Spec
- ├── backend_schema.md                 # AIDL, SQLCipher DDL & Ring Buffer Schema
+ ├── ui_design.md                      # Gemini-Style UI/UX & Passive In-Call Spec
+ ├── backend_schema.md                 # AIDL, FlatBuffers & SQLCipher DDL Schema
  ├── restriction.md                    # Regulatory & Store Policy Analysis
- ├── implementation_plan_milestone_1.md# Sprint 1 Engineering Execution Plan
+ ├── TRAINING_PLAN.md                  # S2S Debrief Model Training & Surgery Plan
  ├── LICENSE                           # Apache 2.0 License
  ├── .github/workflows/build.yml       # GitHub Actions CI/CD Build Pipeline
  └── app/

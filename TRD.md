@@ -8,14 +8,14 @@
 * **Target OS:** Android 14.0 (API 34), Android 15.0 (API 35)
 * **NDK Level:** NDK r26c+ (C++20 standard)
 * **Build System:** Gradle Kotlin DSL (`build.gradle.kts`) + CMake 3.22.1
-* **ML Inference Framework:** ONNX Runtime Mobile v1.19+ with native JNI and C++ APIs
-* **S2S Language Model:** `Qwen3-Omni-3B` (Quantized via INT4 AWQ)
+* **ML Inference Framework:** LiteRT (TensorFlow Lite v2.16+) with GPU (OpenCL) & Qualcomm QNN HTP NPU delegates + ONNX Runtime Mobile v1.19+ fallback
+* **SLM / Debrief Engine:** `Qwen3-Omni-3B` (Pruned to ~1.45B params, quantized via INT4 AWQ) / Local Kokoro / Android TTS
 * **Hardware Acceleration Backends:**
-  * Qualcomm QNN (HTP - Hexagon Tensor Processor) Execution Provider
-  * MediaTek NeuroPilot / Android NNAPI Execution Provider
-  * CPU Fallback: XNNPACK with ARM NEON SIMD optimizations
-* **Telephony & Transport:** LiveKit Android WebRTC SDK v2.7+ over DoT-Compliant Carrier SIP DIDs / Android Telecom Framework (`ROLE_DIALER` 3-Action Caller UI)
-* **Security & Storage:** SQLCipher v4.5.4 (FIPS 140-2 compliant AES-256) + Android Keystore StrongBox
+  * **NPU:** Qualcomm QNN HTP (Hexagon Tensor Processor) / MediaTek NeuroPilot APU (Tier 1 Dual-Head Vectorizer)
+  * **GPU:** Qualcomm Adreno / ARM Mali via OpenCL (Tier 2 Streaming Whisper / SLM Encoder)
+  * **CPU:** ARM NEON SIMD with XNNPACK (Tier 3 Silero VAD v5 + C++ Lockless Ring Buffer)
+* **Telephony & Ingress:** Android Telecom Framework (`ROLE_DIALER` Default Dialer UI) / `InCallService` + `VOICE_COMMUNICATION` passive dual-channel ingress
+* **Storage & Serialization:** Zero-Copy FlatBuffers (`.vecstream`) + SQLCipher v4.5.4 (FIPS 140-2 compliant AES-256-GCM) + Android Keystore StrongBox
 
 ---
 
@@ -24,72 +24,83 @@
 ```
                              ┌────────────────────────────────────────┐
                              │       INCOMING AUDIO (16kHz PCM)       │
+                             │       (In-Call Audio or Ambient Mic)   │
                              └───────────────────┬────────────────────┘
                                                  │
                                                  ▼
                              ┌────────────────────────────────────────┐
                              │      Silero VAD v5 (ARM NEON CPU)      │
-                             │        Buffer Chunk: 32ms (512 samples) │
+                             │      Buffer Chunk: 32ms (512 samples)  │
                              └───────────────────┬────────────────────┘
                                                  │
                         [Voice Detected] ────────┴──────── [Silence / Noise]
                                │                                   │
                                ▼                                   ▼
-          ┌────────────────────────────────────────┐        [Discard Buffer]
-          │   Mimi / WavTokenizer Neural Codec     │        [Zero Memory]
-          │    Encoder (INT8 ONNX / QNN HTP)       │
+          ┌────────────────────────────────────────┐        [Zero Memory]
+          │   Lock-Free SPSC DSP Ring Buffer       │        (memset_s)
+          │   (50 frames / 500ms Mel Spectrogram)  │
           └────────────────────┬───────────────────┘
                                │
-                        (Discrete Tokens)
-                               │
-                               ▼
-          ┌────────────────────────────────────────┐
-          │  Qwen3-Omni-3B S2S SLM   │
-          │    Quantized INT4 AWQ (QNN HTP NPU)    │
-          │    * Enforces Mandatory AI Disclosure  │
-          └────────────────────┬───────────────────┘
-                               │
-                       (Synthesis Tokens)
-                               │
-                               ▼
-          ┌────────────────────────────────────────┐
-          │   Mimi / WavTokenizer Neural Codec     │
-          │    Decoder (INT8 ONNX / QNN HTP)       │
-          └────────────────────┬───────────────────┘
-                               │
-                               ▼
-          ┌────────────────────────────────────────┐
-          │      OUTGOING AUDIO (16kHz PCM)        │
-          │       Pushed to LiveKit SIP Sink       │
-          └────────────────────────────────────────┘
+            ┌──────────────────┴──────────────────┐
+            ▼ (Mel: 1, 50, 80)                    ▼ (Acoustic Waveform)
+┌────────────────────────────────────────┐ ┌────────────────────────────────────────┐
+│ Tier 1: LiteRT NPU Dual-Head Vectorizer│ │ Tier 2: LiteRT GPU (OpenCL) Whisper    │
+│ * 192-d Speaker d-vector (e_spk)       │ │ * 128-d Semantic Intent (w_sem)        │
+│ * 64-d Prosody/Energy Dynamics (z_pros)│ │ * 1-d Pause Delta (Δ_pause)            │
+│ INT8 QAT (~418 KB, < 1.8 ms)           │ │ INT8 OpenCL (~38 MB, < 18 ms)          │
+└──────────────────┬─────────────────────┘ └───────────────────┬────────────────────┘
+                   │                                           │
+                   └─────────────────────┬─────────────────────┘
+                                         │ Composite Vector vt ∈ R^384
+                                         ▼
+                         ┌───────────────────────────────┐
+                         │ FlatBuffers .vecstream Serial │
+                         │ * Memory-mapped zero-copy     │
+                         └───────────────┬───────────────┘
+                                         │
+                                         ▼
+                         ┌───────────────────────────────┐
+                         │ SQLCipher AES-256 Storage     │
+                         │ * Volatile RAM scrub (memset) │
+                         └───────────────┬───────────────┘
+                                         │
+                   (Post-Session Spoken Debrief / User Voice Query)
+                                         │
+                                         ▼
+                         ┌───────────────────────────────┐
+                         │ Qwen3-Omni-3B Debrief SLM     │
+                         │ * Reconstructs conversation   │
+                         │ * Synthesizes SSML narrative  │
+                         └───────────────────────────────┘
 ```
 
 #### 2.1 Model Registry Specifications
 
-| Component | Model Architecture | Parameters | Quantization | Runtime EP | RAM Footprint | Inference Budget |
+| Component | Model Architecture | Parameters | Quantization | Runtime EP | Memory Footprint | Latency Budget |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Voice Activity Detector** | Silero VAD v5 | 1.8 M | INT8 | CPU (XNNPACK) | ~2.5 MB | < 2.5 ms / 32ms chunk |
-| **Acoustic Neural Codec** | Mimi / WavTokenizer | 75 M | INT8 | QNN HTP / NNAPI | ~82 MB | < 12 ms / frame |
-| **Speech-to-Speech SLM** | `Qwen3-Omni-3B` | 1.1 B | INT4 (AWQ) | QNN HTP NPU | ~620 MB | < 25 ms / token |
-| **Semantic Vector Encoder** | CLAP / WavLM Latent Head | 45 M | INT8 | QNN / CPU | ~48 MB | < 45 ms / utterance |
+| **Tier 1 Dual-Head Vectorizer** | Dual-Head Conv1D/GRU | 420 K | INT8 QAT | LiteRT NPU (QNN HTP) | ~418 KB | < 1.8 ms / 500ms chunk |
+| **Tier 2 Semantic Encoder** | Streaming Whisper Tiny | 38 M | INT8 | LiteRT GPU (OpenCL) | ~38 MB | < 18 ms / chunk |
+| **Post-Session SLM Narrator** | Pruned `Qwen3-Omni-3B` | 1.45 B | INT4 AWQ | LiteRT / QNN NPU | ~725 MB | < 25 ms / token |
 
-#### 2.2 S2S SLM Mandatory AI Disclosure System Prompt Contract
-System prompt contract for `Qwen3-Omni-3B`:
+#### 2.2 Post-Session Expressive Narrative Debrief Prompt Contract
+System prompt contract for `Qwen3-Omni-3B` during debrief generation:
 ```
-System Prompt: "You are S.H.R.U.T.I., an automated AI voice assistant powered by Qwen3-Omni-3B screening a call for [User Name]. Your very first sentence to the caller MUST strictly be: 'I am an automated voice assistant screening this call for [User Name]. Please state the reason for your call.' Do not deviate from this disclosure."
+System Prompt: "You are S.H.R.U.T.I., an expressive post-session narrator. Analyze the provided multi-speaker vector trajectory and narrate a concise, engaging spoken debrief of the conversation. Attribute statements accurately to Speaker 1 and Speaker 2. Use SSML prosody tags to convey urgency or assurance. Keep the debrief under 30 seconds."
 ```
 
 ---
 
 ### 3. Telephony Architecture & Regulatory Compliance Engines
 
-#### 3.1 3-Action Incoming Call State Machine (`ShrutiInCallActivity.kt`)
-When `InCallService` signals an incoming ringing state:
+#### 3.1 Passive In-Call Voice Vectorizer State Machine (`ShrutiInCallActivity.kt`)
+When `InCallService` handles telephony call transitions:
 ```kotlin
-enum class IncomingCallAction {
-    DECLINE,                 // Terminates call immediately
-    ANSWER,                  // Answers call directly to earpiece/speaker
-    DELEGATE_AI_SCREENER     // Accepts call in AI bridge mode & launches Qwen3-Omni-3B screening overlay
+enum class CallSessionState {
+    IDLE,
+    RINGING,                          // Displays standard Default Dialer Accept/Decline UI
+    ACTIVE_CALL_PASSIVE_VECTORIZE,    // User converses normally; audio pushed to C++ DSP ring buffer
+    CALL_DISCONNECTED_FINALIZE_STREAM // Flushes FlatBuffers .vecstream & generates debrief notification
 }
 ```
 
@@ -97,7 +108,7 @@ enum class IncomingCallAction {
 ```kotlin
 fun evaluateCallInterception(phoneNumber: String): CallAction {
     if (PhoneNumberUtils.isEmergencyNumber(phoneNumber) || phoneNumber in listOf("112", "911", "100", "101", "102")) {
-        return CallAction.EMERGENCY_PASS_THROUGH // Zero AI interception, direct PSTN route
+        return CallAction.EMERGENCY_PASS_THROUGH // Zero AI routing, direct PSTN route
     }
     return TraiPrefixMatcher.evaluate(phoneNumber)
 }

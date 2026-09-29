@@ -45,21 +45,21 @@ Your custom model will consist of **three interconnected components**:
 
 ### 3. Step-by-Step Execution Plan
 
-#### Step 1: Curate the Telephony Dialogue Dataset
+#### Step 1: Curate the Telephony Dialogue & Debrief Dataset
 
-The foundation of a specialized screening model is domain-specific conversational data. You need approximately **10,000 to 25,000 multi-turn synthetic dialogue pairs**:
+The foundation of a specialized debrief and vectorization model is domain-specific conversational data. You need approximately **10,000 to 25,000 multi-speaker conversation-to-debrief pairs**:
 
 * **Domain Distribution:**
-* *Delivery & Couriers (35%):* Swiggy, Zomato, Amazon, Blue Dart (asking about gate access, OTP policies, leaving with security).
-* *Telemarketing & Spam (35%):* Pre-approved loans, credit cards, real estate schemes, insurance pitches (polite but firm deflection and rapid call termination).
-* *Service & Appointments (20%):* Plumbers, electricians, car servicing, clinic confirmations.
-* *Spoken Debrief Tasks (10%):* Feeding past dialogue context with a `[TASK: DEBRIEF]` token to generate a single-sentence spoken summary.
+* *Spoken Debrief & Summarization (35%):* Feeding past multi-turn conversation vectors with a `[TASK_DEBRIEF]` token to generate a concise, expressive 5-to-10 second spoken summary with speaker attribution.
+* *Delivery & Couriers (30%):* Swiggy, Zomato, Amazon, Blue Dart (conversations between user and courier regarding gate access, OTP policies, leaving with security) paired with post-call debrief targets.
+* *Telemarketing & Spam Detection (20%):* Unsolicited loan, credit card, and insurance pitches (categorized for spam logging and 1-tap 1909 TRAI reporting).
+* *Voice Onboarding & Calibration (15%):* Interactive spoken setup turns (`[TASK_ONBOARDING]`) establishing name, location, delivery rules, and owner voice baseline.
 
 
 * **Data Generation Recipe:**
-1. Generate text dialogues in English, Hindi, and Hinglish using an advanced LLM with prompt templates modeling Indian caller behavior.
-2. Pass the caller turns through diverse TTS engines (varying accents, background street/vehicle noise, and applying an 8kHz/16kHz telephone bandpass filter).
-3. Pass the assistant turns through your single target voice model (to maintain a consistent assistant persona).
+1. Generate multi-speaker dialogues in English, Hindi, and Hinglish using an advanced LLM with prompt templates modeling authentic Indian conversations paired with target spoken debriefs.
+2. Pass the speaker turns through diverse TTS engines (varying accents, background street/vehicle noise, and applying an 8kHz/16kHz telephone bandpass filter).
+3. Pass the assistant debrief turns through your target narrator voice model.
 
 
 
@@ -73,19 +73,19 @@ Training requires a single rented GPU (e.g., 1x NVIDIA A100 or H100 via RunPod o
 
 
 2. **Stage 2 — Voice Generation Alignment (Audio Token Emission):**
-* *Objective:* Teach Qwen to output discrete acoustic codec tokens (SNAC or Mimi codes) alongside speech generation.
+* *Objective:* Teach Qwen to output discrete acoustic codec tokens (SNAC or Mimi codes) alongside expressive speech generation.
 * *Method:* Train the parallel audio prediction heads using Cross-Entropy loss over the target codec token indices.
 
 
-3. **Stage 3 — Supervised Fine-Tuning (SFT on Call Screening):**
-* *Objective:* Train the entire system on the 20,000 telephony dialogue turns.
-* *Method:* Unfreeze Qwen (or train with LoRA rank 64/alpha 128). Train on end-to-end speech-in to speech-out screening scenarios, enforcing conversational brevity (replies under 10 seconds).
+3. **Stage 3 — Supervised Fine-Tuning (SFT on Spoken Debrief & Storytelling):**
+* *Objective:* Train the entire system on the 20,000 conversation-to-debrief synthesis turns.
+* *Method:* Unfreeze Qwen (or train with LoRA rank 64/alpha 128). Train on end-to-end vector-in to speech-out narrative debrief scenarios, enforcing conversational brevity (replies under 10 seconds) and SSML prosodic dynamics.
 
 
 
 #### Step 3: Pruning and Hardening for the Zero-Text Invariant
 
-* **Prune the Text Emission Head:** Discard the standard text vocabulary projection matrix (`lm_head`) or leave it uncalled during screening inference. The model will directly emit the 7 to 8 parallel acoustic token streams, mathematically guaranteeing zero text generation in volatile memory.
+* **Prune the Text Emission Head:** Discard the standard text vocabulary projection matrix (`lm_head`) or leave it uncalled during debrief inference. The model will directly emit the 7 to 8 parallel acoustic token streams, mathematically guaranteeing zero text generation in volatile memory.
 
 
 * **Latent Vector Hook:** Add an extraction hook after the final self-attention layer to pull the mean-pooled 512-d hidden state $\mathbf{v}_{\text{intent}}$ when a call disconnects, providing the vector for SQLCipher persistence.
@@ -172,53 +172,53 @@ Callers cough, breathe heavily, or have street noise in the background. A simple
 
 ### Layer 2: Model-Level Interruption Training (Mini-Omni2 Style)
 
-How do you train the model so it naturally handles being cut off?
+How do you train the model so it naturally handles being cut off during spoken debrief playback?
 
-In traditional systems, the model generates a complete response and has no concept of time or interruption. In a native Speech-to-Speech architecture, you train the model using **Duplex Dual-Track Streams**.
+In traditional systems, the model generates a complete response and has no concept of time or interruption. In a native Speech-to-Speech debrief architecture, you train the model using **Duplex Dual-Track Streams**.
 
 #### 1. Dual-Track Data Representation
 
 During training, data is formatted as two synchronized time-aligned streams:
 
-$$\begin{aligned} \text{Track A (Caller):}    & \quad [\text{Audio Tokens}] \longrightarrow [\text{Audio Tokens (Interrupts!)}] \\ \text{Track B (Assistant):} & \quad [\text{Silence Tokens}] \longrightarrow [\text{Audio Tokens}] \longrightarrow \mathbf{\langle \text{CUT} \rangle} \longrightarrow [\text{Listening Tokens}] \end{aligned}$$
+$$\begin{aligned} \text{Track A (User Query):}    & \quad [\text{Audio Tokens}] \longrightarrow [\text{Audio Tokens (Interrupts!)}] \\ \text{Track B (Assistant Narrator):} & \quad [\text{Silence Tokens}] \longrightarrow [\text{Audio Tokens (Debrief)}] \longrightarrow \mathbf{\langle \text{CUT} \rangle} \longrightarrow [\text{Listening Tokens}] \end{aligned}$$
 
-When the caller starts speaking on Track A while the assistant is emitting tokens on Track B, the ground truth on Track B immediately transitions to a special break token: $\langle\text{CUT}\rangle$ or $\langle\text{LISTEN}\rangle$.
+When the user starts speaking on Track A while the assistant is emitting debrief tokens on Track B, the ground truth on Track B immediately transitions to a special break token: $\langle\text{CUT}\rangle$ or $\langle\text{LISTEN}\rangle$.
 
 #### 2. Fine-Tuning Recipe for Interruption Handling
 
 * **Inject Synthetic Interruptions into Dataset:**
-Take standard multi-turn screening dialogues. Randomly pick 20% of the assistant turns and simulate a caller interruption 2 to 3 seconds in (e.g., Assistant says: *"Hello, I am screening this call for—"*, Caller interrupts: *"Wait, is this an AI?"*).
+Take standard spoken debrief audio turns. Randomly pick 20% of the assistant debrief turns and simulate a user interruption 2 to 3 seconds in (e.g., Assistant says: *"Your meeting with Ravi covered the Q3 deliverables—"*, User interrupts: *"Wait, what was the deadline?"*).
 * **Target Objective:**
-Train Qwen to predict the transition to silence/listening as soon as the audio adapter projects incoming caller acoustic frames during an active generation turn.
+Train Qwen to predict the transition to silence/listening as soon as the audio adapter projects incoming user acoustic frames during an active debrief generation turn.
 
 ---
 
 ### Layer 3: Managing the Model's State (KV-Cache Rollback)
 
-When the assistant is interrupted mid-sentence, what happens to Qwen's memory?
+When the assistant is interrupted mid-sentence during a debrief, what happens to Qwen's memory?
 
 If the assistant planned to say:
 
-> *"I am an automated assistant screening this call on behalf of the recipient."*
+> *"Delivery agent Ramesh called regarding Amazon package delivery and confirmed leaving it with security."*
 
 But was cut off at:
 
-> *"I am an automated—"*
+> *"Delivery agent Ramesh called regarding—"*
 
-If you leave the entire planned sentence in Qwen's KV-Cache, the model will believe it said the entire sentence. Its next reply will assume the caller heard everything, leading to conversational confusion.
+If you leave the entire planned sentence in Qwen's KV-Cache, the model will believe it spoke the entire sentence. Its next reply will assume the user heard everything, leading to conversational confusion.
 
 #### The Rollback Algorithm:
 
 1. **Track Emitted vs. Decoded Tokens:**
-Keep an atomic counter in C++ of how many SNAC/Mimi audio tokens actually exited the playback ring buffer and reached the caller's ear.
+Keep an atomic counter in C++ of how many SNAC/Mimi audio tokens actually exited the playback ring buffer and reached the speaker.
 2. **Truncate the KV-Cache:**
 Discard the KV-cache entries corresponding to all unplayed future tokens.
 3. **Append the State Marker:**
-Append a lightweight boundary token indicating an incomplete turn, followed immediately by the newly arriving caller audio tokens.
+Append a lightweight boundary token indicating an incomplete turn, followed immediately by the newly arriving user audio tokens.
 4. **Resume Streaming Generation:**
 Prompt Qwen to generate a response tailored to the interruption:
-* Caller: *"Wait, is this an AI?"*
-* Assistant: *"Yes, I am screening for [User]. Who is calling, please?"*
+* User: *"Did he mention an OTP?"*
+* Assistant: *"No OTP was mentioned; the package was handed directly to security."*
 
 
 
@@ -278,22 +278,22 @@ Instead of hunting for audio recordings, generate the text conversations using a
 
 #### Step 1: Automated Script Generation
 
-Write a Python script that prompts an LLM (such as Gemini Flash) to output structured multi-turn call screening transcripts.
+Write a Python script that prompts an LLM (such as Gemini Flash) to output structured multi-speaker conversation-to-debrief pairs.
 
 ```json
 {
   "scenario": "Swiggy Delivery - Gate Access",
   "language": "Hinglish",
-  "turns": [
-    {"speaker": "caller", "text": "Bhaiyya Swiggy delivery. Security gate kholne nahi de raha."},
-    {"speaker": "assistant", "text": "Please give the phone to security, or leave the packet at tower 3 reception."},
-    {"speaker": "caller", "text": "Theek hai, reception pe drop kar raha hoon."}
-  ]
+  "call_dialogue": [
+    {"speaker": "courier", "text": "Bhaiyya Swiggy delivery. Security gate kholne nahi de raha."},
+    {"speaker": "user", "text": "Security ko phone do ya reception pe drop kar do."},
+    {"speaker": "courier", "text": "Theek hai, reception pe drop kar raha hoon."}
+  ],
+  "debrief_target": "Swiggy courier called regarding gate access and confirmed package was dropped at reception."
 }
-
 ```
 
-*Vary the scenarios:* Delivery agents (Swiggy, Zomato, Amazon), credit card/loan pitches, car servicing confirmations, wrong numbers, and aggressive telemarketers.
+*Vary the scenarios:* Delivery interactions (Swiggy, Zomato, Amazon), credit card/loan telemarketing, doctor appointments, long 20-minute multi-person meetings, and home maintenance calls.
 
 #### Step 2: Batch Audio Synthesis (Free & Fast)
 
@@ -330,25 +330,25 @@ You **do not** need 100,000 audio hours because you are not training the speech 
 * The **SNAC/Mimi decoder** already knows how to reconstruct high-fidelity acoustic waveforms.
 * The **Qwen3-Omni backbone** already understands conversational syntax, logic, and Hinglish.
 
-Because the foundational models are pre-aligned, you only need **1,500 to 3,000 high-quality screening turns** to fine-tune the model with **LoRA (Low-Rank Adaptation)**. The model only needs to learn conversational brevity (keeping answers under 8 seconds) and call-screening intent patterns.
+Because the foundational models are pre-aligned, you only need **1,500 to 3,000 high-quality debrief and onboarding turns** to fine-tune the model with **LoRA (Low-Rank Adaptation)**. The model only needs to learn conversational brevity (keeping answers under 8 seconds) and vector-to-narrative synthesis patterns.
 
 ---
 
 ### How to Generate Interruption (Barge-In) Data
 
-You don't need real callers interrupting someone on the phone to train barge-in handling:
+You don't need real human recording sessions to train barge-in handling:
 
-1. Take an audio clip of the assistant speaking: *"I am an automated assistant screening this call..."* (duration: 3.5 seconds).
+1. Take an audio clip of the assistant speaking a debrief: *"Amazon delivery arrived at Gate 2 and package was left with security..."* (duration: 4.5 seconds).
 2. Randomly select a timestamp between 1.0s and 2.5s.
 3. Truncate the assistant audio at that point and inject the special token `[INTERRUPT]`.
-4. Splice in the caller's audio clip starting at that exact millisecond (*"Wait, where is the owner?"*).
-5. Label the assistant's target continuation as a direct response to the interruption.
+4. Splice in the user's voice query starting at that exact millisecond (*"Wait, did they ask for an OTP?"*).
+5. Label the assistant's target continuation as a direct response to the follow-up.
 
 A single 50-line Python script can generate 2,000 realistic interruption training scenarios from basic paired speech clips in minutes.
 
-Would you like a ready-to-run Python script using `edge-tts` and an LLM API to start generating your first 500 synthetic call-screening pairs?
+Would you like a ready-to-run Python script using `edge-tts` and an LLM API to start generating your first 500 synthetic conversation-debrief pairs?
 
-Adding natural Indian voices is essential for **S.H.R.U.T.I.**: Indian delivery couriers, cab drivers, and telemarketers will immediately hang up or assume a scam if greeted by a flat Silicon Valley or British accent. Grounding the assistant in a natural Indian cadence—with authentic rhythm, prosody, and code-mixed phrasing—makes interactions seamless.
+Adding natural Indian voices is essential for **S.H.R.U.T.I.**: Device owners expect authentic rhythm, prosody, and code-mixed phrasing when listening to spoken debriefs. Grounding the assistant in a natural Indian cadence makes post-call storytelling seamless.
 
 ---
 
@@ -419,7 +419,7 @@ Ship the app with **4 curated presets** stored in `assets/voices/`:
 | **Preset 1: "Aditi"** | Warm, patient, polite | Couriers, Swiggy/Zomato, Ride-hail drivers | Clear Indian English with natural Hindi phonetics; soft sentence boundaries. |
 | **Preset 2: "Agastya"** | Firm, measured, authoritative | Telemarketers, banking offers, suspicious spam | Deeper pitch, crisp articulation; designed to cut through sales pitches. |
 | **Preset 3: "Priya"** | Neutral, gentle, clear | Regional callers & service confirmations | Subtle South-Indic cadence; balanced tone optimized for 16 kHz phone audio. |
-| **Preset 4: "Kabir"** | Friendly, casual | Standard everyday screening | Relaxed, everyday conversational Indian English/Hinglish. |
+| **Preset 4: "Kabir"** | Friendly, casual | Standard everyday debriefs | Relaxed, everyday conversational Indian English/Hinglish. |
 
 Each preset is just a static **2,048-byte binary file** ($\mathbb{R}^{512}$ Float32 array) bundled in the APK, requiring **zero extra storage footprint** and **zero runtime NPU compute** to load.
 
@@ -829,7 +829,7 @@ Decrypted Vector Trajectory ──► Multi-Vector Soft Prompt ──► Spoken 
 #### Module D: Mathematical Vectorization & Zero-Persistence Simulation
 
 * **Hidden State Pooling:**
-Extract the final hidden state sequence $\mathbf{H} \in \mathbb{R}^{T \times 896}$ of the screening turn:
+Extract the final hidden state sequence $\mathbf{H} \in \mathbb{R}^{T \times 896}$ of the conversation turn:
 
 $$\mathbf{h}_{\text{pool}} = \frac{1}{T} \sum_{t=1}^T \mathbf{h}_t$$
 
@@ -960,7 +960,7 @@ To avoid triggering Google Colab’s automated GPU cutoff (which locks you out o
 3. **Upload Checkpoints to GitHub Releases (Avoid Session Loss):**
 * Free Colab sessions can drop unexpectedly if your browser tab goes to sleep. Configure `upload_to_github_release()` after key milestones or every 150 steps so your LoRA adapter weights persist safely on GitHub Releases even if the instance terminates.
 
-To run **Qwen3-Omni-3B** efficiently inside an Android telephony service, you can perform architectural surgery to strip away components unnecessary for an audio-native screening agent. By excising the text generation heads, truncating the input vocabulary, and pruning redundant transformer depth, you can cut the model's footprint from **~3.1B parameters down to ~1.4B–1.6B parameters**, shrinking the INT4 binary from **$\sim 1.9\text{ GB}$ to under $750\text{ MB}$**.
+To run **Qwen3-Omni-3B** efficiently inside an Android background service, you can perform architectural surgery to strip away components unnecessary for an audio-native debrief and narration engine. By excising the text generation heads, truncating the input vocabulary, and pruning redundant transformer depth, you can cut the model's footprint from **~3.1B parameters down to ~1.4B–1.6B parameters**, shrinking the INT4 binary from **$\sim 1.9\text{ GB}$ to under $750\text{ MB}$**.
 
 ```
 [ Original Qwen3-Omni-3B (~3.09B Params) ]
@@ -979,7 +979,7 @@ To run **Qwen3-Omni-3B** efficiently inside an Android telephony service, you ca
                     Quantize to INT4 (AWQ / GPTQ)
                                    │
                                    ▼
-             ~725 MB Flash Storage / Android Memory Footprint
+              ~725 MB Flash Storage / Android Memory Footprint
 
 ```
 
@@ -1000,7 +1000,7 @@ $$151,936 \times 2048 = 311,164,928 \text{ parameters}$$
 #### B. Truncate the Input Embedding Matrix (`embed_tokens`) — Saves ~310M Parameters
 
 * **The Component:** The input embedding table also stores $151,936 \times 2048 = 311\text{ M}$ parameters.
-* **Why Strip It:** The model ingests audio features directly from the Whisper-small encoder ($d_w = 768$) projected into Qwen's latent space ($d = 2048$). It never ingests text prompts, requiring only a tiny set of special control tokens (such as `[TASK_SCREEN]`, `[TASK_DEBRIEF]`, `[LANG_HI]`, `[LANG_EN]`, `[INTERRUPT]`).
+* **Why Strip It:** The model ingests audio features directly from the Whisper-small encoder ($d_w = 768$) projected into Qwen's latent space ($d = 2048$). It never ingests text prompts, requiring only a tiny set of special control tokens (such as `[TASK_DEBRIEF]`, `[TASK_ONBOARDING]`, `[LANG_HI]`, `[LANG_EN]`, `[INTERRUPT]`).
 * **Action:** Truncate `embed_tokens` from $151,936$ rows down to $512$ rows ($512 \times 2048 \approx 1\text{ M}$ parameters).
 
 #### C. Depth Pruning (Layer Dropping: 36 Layers $\to$ 22 Layers) — Saves ~1.08B Parameters
@@ -1010,13 +1010,13 @@ $$151,936 \times 2048 = 311,164,928 \text{ parameters}$$
 * MLP (`gate_proj`, `up_proj`, `down_proj` with intermediate size $11,008$): $\sim 67.6\text{ M}$ parameters
 
 
-* **Why Prune It:** 36 layers provide general reasoning for complex math, Python programming, and multi-step logic. Telephony call screening (identifying couriers, rejecting spam, taking delivery notes) is a narrow classification and dialogue task that does not require deep reasoning cascades.
+* **Why Prune It:** 36 layers provide general reasoning for complex math, Python programming, and multi-step logic. Post-call spoken debriefing and voice onboarding is a focused summarization and narrative storytelling task that does not require deep 36-layer general reasoning cascades.
 * **Action:** Drop 14 intermediate layers (e.g., layers 16 to 29), retaining 22 layers. Layer pruning preserves language comprehension while eliminating over $1\text{ Billion}$ parameters.
 
 #### D. Constrain Sequence Length / KV Cache
 
 * Standard Qwen3-Omni config allocates attention buffers up to 32,768 tokens (configured to 8,192 in S.H.R.U.T.I. to accommodate multi-person conversations and long multi-turn debriefs).
-* Cap `max_position_embeddings` to **2,048 tokens**. A 30-second conversational screening turn rarely exceeds 1,200 acoustic frames. Hard-capping this saves several hundred megabytes of dynamic RAM during active calls.
+* Cap `max_position_embeddings` to **2,048 tokens**. A 30-second spoken debrief turn rarely exceeds 1,200 acoustic frames. Hard-capping this saves several hundred megabytes of dynamic RAM during active inference.
 
 ---
 

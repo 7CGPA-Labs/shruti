@@ -6,8 +6,9 @@
 
 * **Target Package:** `org.seven_cgpalabs.shruti`
 * **Target Platforms:** Android 14.0+ (API 34 & 35)
-* **S2S SLM Engine:** `Qwen3-Omni-3B` (Quantized via INT4 AWQ)
-* **Storage Engine:** SQLCipher v4.5.4 (AES-256-GCM encrypted at rest)
+* **ML Runtime:** LiteRT Tri-Tier Runtime (NPU + GPU OpenCL + CPU)
+* **S2S / Debrief Engine:** `Qwen3-Omni-3B` (Pruned to ~1.45B params, quantized via INT4 AWQ)
+* **Storage Engine:** Zero-Copy FlatBuffers (`.vecstream`) + SQLCipher v4.5.4 (AES-256-GCM encrypted at rest)
 * **IPC Transport:** Android AIDL / Binder IPC
 * **Native Memory:** C++20 Lockless SPSC Circular Ring Buffer
 * **Compliance:** DoT Indian Telecom Interconnect, Google Play `ROLE_DIALER` & AI Policy Compliant
@@ -15,23 +16,25 @@
 
 ---
 
-## 2. Heterogeneous ML Execution & Mandatory AI Disclosure
+## 2. Heterogeneous LiteRT Execution & Debrief Contract
 
 | Subsystem Component | Model Architecture | Parameters | Quantization | Execution Provider (EP) | Memory Footprint | Latency Budget |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Voice Activity Detector** | Silero VAD v5 | 1.8 M | INT8 ONNX | CPU (XNNPACK / ARM NEON) | ~2.5 MB | < 2.5 ms / 32ms chunk |
-| **Neural Codec Encoder** | Mimi / WavTokenizer | 75 M | INT8 ONNX | Qualcomm QNN HTP / NNAPI | ~82 MB | < 12 ms / frame |
-| **Speech-to-Speech SLM** | `Qwen3-Omni-3B` | 1.1 B | INT4 AWQ | Qualcomm QNN HTP NPU | ~620 MB | < 25 ms / token |
-| **Neural Codec Decoder** | Mimi / WavTokenizer | 75 M | INT8 ONNX | Qualcomm QNN HTP / NNAPI | ~82 MB | < 15 ms / frame |
-| **Latent Vector Encoder** | CLAP / WavLM Head | 45 M | INT8 ONNX | QNN HTP / CPU Fallback | ~48 MB | < 45 ms / utterance |
+| **Voice Activity Detector** | Silero VAD v5 | 1.8 M | INT8 | CPU (XNNPACK / ARM NEON) | ~2.5 MB | < 2.5 ms / 32ms chunk |
+| **Tier 1 Dual-Head Vectorizer** | Dual-Head Conv1D/GRU | 420 K | INT8 QAT | LiteRT NPU (QNN HTP / NNAPI) | ~418 KB | < 1.8 ms / 500ms chunk |
+| **Tier 2 Semantic Encoder** | Streaming Whisper Tiny | 38 M | INT8 | LiteRT GPU (OpenCL) | ~38 MB | < 18 ms / chunk |
+| **Post-Session SLM Narrator** | Pruned `Qwen3-Omni-3B` | 1.45 B | INT4 AWQ | LiteRT / QNN NPU | ~725 MB | < 25 ms / token |
 
-*Mandatory AI Disclosure System Prompt Contract:*
-`"I am an automated voice assistant powered by Qwen3-Omni-3B screening this call for [User Name]. Please state the reason for your call."`
+*Post-Session Expressive Narrative Debrief System Prompt Contract:*
+```
+System Prompt: "You are S.H.R.U.T.I., an expressive post-session narrator. Analyze the provided multi-speaker vector trajectory and narrate a concise, engaging spoken debrief of the conversation. Attribute statements accurately to Speaker 1 and Speaker 2. Use SSML prosody tags to convey urgency or assurance. Keep the debrief under 30 seconds."
+```
 
 ---
 
 ## 3. AIDL Interface Contracts
 
+### 3.1 Passive Audio Pipeline AIDL
 ```idl
 // Package: org.seven_cgpalabs.shruti.ipc
 package org.seven_cgpalabs.shruti.ipc;
@@ -39,15 +42,53 @@ package org.seven_cgpalabs.shruti.ipc;
 interface IShrutiAudioPipeline {
     boolean initializePipeline(in String modelAssetPath);
     oneway void pushInboundFrame(in byte[] pcmFrameData, int sampleCount);
-    byte[] pollOutboundFrame(int requestedSamples);
-    oneway void triggerBargeIn();
+    oneway void finalizeSessionAndSerialize(in String sessionUuid);
     oneway void terminateSessionAndScrubMemory();
+}
+```
+
+### 3.2 Spoken Debrief Generator AIDL
+```idl
+// Package: org.seven_cgpalabs.shruti.ipc
+package org.seven_cgpalabs.shruti.ipc;
+
+interface IShrutiDebriefEngine {
+    byte[] synthesizeSpokenDebrief(in String sessionUuid);
+    oneway void stopDebriefPlayback();
 }
 ```
 
 ---
 
-## 4. SQLCipher Cryptographic Storage Schema
+## 4. FlatBuffers Binary Serialization Schema (`shruti_vector_stream.fbs`)
+
+```fbs
+namespace org.seven_cgpalabs.shruti.serialization;
+
+table VectorFrame {
+    timestamp_ms: ulong;
+    speaker_id: ubyte;
+    confidence: float;
+    speaker_embedding: [float];   // 192-d
+    prosody_features: [float];    // 64-d
+    semantic_embedding: [float];  // 128-d
+    pause_delta_ms: ushort;
+}
+
+table ShrutiVectorStream {
+    version: uint;
+    session_uuid: string;
+    start_epoch_ms: ulong;
+    total_frames: uint;
+    frames: [VectorFrame];
+}
+
+root_type ShrutiVectorStream;
+```
+
+---
+
+## 5. SQLCipher Cryptographic Storage Schema
 
 ```sql
 CREATE TABLE IF NOT EXISTS call_sessions (
@@ -62,9 +103,6 @@ CREATE TABLE IF NOT EXISTS call_sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_timestamp ON call_sessions(timestamp_epoch DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_caller ON call_sessions(caller_hash);
 ```
-
-
----
 
 ### Session Vector Trajectory DDL (Long Multi-Person Conversations)
 

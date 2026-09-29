@@ -5,10 +5,10 @@
 ## 1. Executive Summary & Design Philosophy
 
 **Target Package:** `org.seven_cgpalabs.shruti`  
-**S2S SLM Engine:** `Qwen3-Omni-3B` (Quantized via INT4 AWQ)  
-**Design Vision:** Gemini-inspired modern mobile AI assistant experience built entirely with Jetpack Compose.  
-**Core Invariant:** **Zero-Text Transcripts, Mandatory AI Transparency, and Human-in-the-Loop Regulatory Control.**  
-S.H.R.U.T.I. utilizes organic visual feedback (Gemini-style dynamic glow and harmonic acoustic orbits) to reflect conversational turns, sentiment, and system states without exposing written call content.
+**S2S / Debrief Engine:** `Qwen3-Omni-3B` (Quantized via INT4 AWQ) / LiteRT Tri-Tier Runtime  
+**Design Vision:** Gemini-inspired modern mobile AI experience built entirely with Jetpack Compose.  
+**Core Invariant:** **Zero-Text Transcripts, Passive In-Call Listener (Never Intercepts or Speaks Live), and Post-Call Expressive Spoken Debriefs.**  
+S.H.R.U.T.I. utilizes organic visual feedback (Gemini-style dynamic glow borders and harmonic acoustic orbit spheres) to reflect conversational turns, speaker diarization, and system states without ever exposing or persisting written call transcripts.
 
 ---
 
@@ -21,23 +21,32 @@ S.H.R.U.T.I. utilizes organic visual feedback (Gemini-style dynamic glow and har
                                                       │
                                                       ▼
                                   ┌────────────────────────────────────────┐
-                                  │   3-Action Incoming Call Screen        │
-                                  │   (ShrutiInCallActivity.kt)            │
-                                  │   [ Decline ] [ Answer ] [ Screen AI ] │
+                                  │       Default Dialer Incoming Call     │
+                                  │       [ Decline ]        [ Answer ]    │
                                   └───────────────────┬────────────────────┘
                                                       │
-                                    [User Taps "Screen with S.H.R.U.T.I. AI"]
+                                           [User Answers Call]
                                                       │
                                                       ▼
                                   ┌────────────────────────────────────────┐
-                                  │   Gemini-Style Voice Activation Overlay│
-                                  │   (ShrutiBottomSheetOverlay.kt)        │
-                                  │   * Multi-color fluid glow border      │
-                                  │   * Dynamic Acoustic Orbit particle wave│
-                                  │   * Real-time one-tap action chips     │
+                                  │   In-Call Passive Vectorizer UI        │
+                                  │   (ShrutiInCallActivity.kt)            │
+                                  │   * Minimal ambient privacy pulse      │
+                                  │   * Zero live AI speech / interception │
+                                  │   * Passive LiteRT NPU vector stream   │
                                   └───────────────────┬────────────────────┘
                                                       │
-                                   [Tap Debrief / App Launch]
+                                           [Call Disconnects]
+                                                      │
+                                                      ▼
+                                  ┌────────────────────────────────────────┐
+                                  │   Post-Call Debrief Notification Card  │
+                                  │   (ShrutiDebriefNotification.kt)       │
+                                  │   * 1-Tap "Play Voice Debrief"         │
+                                  │   * Human-in-the-loop action chips     │
+                                  └───────────────────┬────────────────────┘
+                                                      │
+                                    [Tap Debrief / App Launch]
                                                       │
                                                       ▼
                                   ┌────────────────────────────────────────┐
@@ -45,7 +54,7 @@ S.H.R.U.T.I. utilizes organic visual feedback (Gemini-style dynamic glow and har
                                   │    (ShrutiConversationScreen.kt)       │
                                   │   * Hero Acoustic Orbit sphere         │
                                   │   * Spoken Debrief Audio Cards         │
-                                  │     (Powered by Qwen3-Omni-3B)    │
+                                  │     (Powered by Qwen3-Omni-3B)         │
                                   │   * Voice-to-Voice Search Bar          │
                                   │   * ROLE_DIALER Dialpad & Emergency    │
                                   └────────────────────────────────────────┘
@@ -53,14 +62,12 @@ S.H.R.U.T.I. utilizes organic visual feedback (Gemini-style dynamic glow and har
 
 ---
 
-## 3. Screen 2: Full Assistant & ROLE_DIALER Telephony App
+## 3. Screen: Full Assistant & ROLE_DIALER Telephony App
 
 ### Component Details
-1. **Emergency Pass-Through Button (`112` / `911`):** Direct one-tap emergency call action bypassing AI screening.
-2. **Spoken Debrief Audio Cards (`ShrutiDebriefCard.kt`):** Tapping Play button (`▶`) invokes on-device **`Qwen3-Omni-3B`** to synthesize a 5-to-10 second spoken voice debrief on demand (*"Delivery agent called regarding Amazon package delivery at gate"*).
-3. **Voice-to-Voice Query Bar (`ShrutiVoiceSearchBar.kt`):** Voice query projected into 512-d unit vector $\mathbf{u}$ and matched via cosine similarity against SQLCipher embeddings.
-
-
+1. **Emergency Pass-Through Button (`112` / `911`):** Direct one-tap emergency call action bypassing all AI pipelines with instant PSTN connection.
+2. **Spoken Debrief Audio Cards (`ShrutiDebriefCard.kt`):** Tapping the Play button (`▶`) invokes on-device **`Qwen3-Omni-3B`** to synthesize a 5-to-10 second expressive spoken voice debrief on demand (*"Delivery agent called regarding Amazon package delivery; package left at building reception"*).
+3. **Voice-to-Voice Query Bar (`ShrutiVoiceSearchBar.kt`):** User speaks a query (*"What did the doctor recommend yesterday?"*), projected into a vector embedding and matched via cosine similarity against SQLCipher trajectory matrices.
 
 ---
 
@@ -70,35 +77,35 @@ The onboarding process is a voice-first interactive calibration session requirin
 
 1. **Harmonic Acoustic Orbit Visualizer:** Dynamic Jetpack Compose canvas displaying fluid multi-colored glowing orbits reacting to user spoken input and assistant prompts.
 2. **Step Progress Chips:** 5 visual progress indicators corresponding to setup milestones:
-   - `[1. Identity]` $ightarrow$ `[2. Location & Tower]` $ightarrow$ `[3. Gate & Landmarks]` $ightarrow$ `[4. Handover Rules]` $ightarrow$ `[5. Confirmation]`
+   - `[1. Identity]` $\rightarrow$ `[2. Location & Tower]` $\rightarrow$ `[3. Gate & Landmarks]` $\rightarrow$ `[4. Handover Rules]` $\rightarrow$ `[5. Confirmation]`
 3. **Double-Confirmation Action Sheet:** Displays extracted grounding card summary (Owner Name, Address, Landmarks, Delivery Rules) during Step 5 with voice and single-tap affirmation controls (`[Confirm & Activate]`, `[Re-record Spoken Details]`).
-4. **Encrypted System Embedding Generator:** Upon affirmation, compiles facts into static System Embedding Tensor $\mathbf{E}_{	ext{sys}}$ encrypted via AES-256-GCM in SQLCipher (`profile_vector.blob`).
+4. **Encrypted System Embedding Generator:** Upon affirmation, compiles facts into static System Embedding Tensor $\mathbf{E}_{\text{sys}}$ encrypted via AES-256-GCM in SQLCipher (`profile_vector.blob`).
 
 ---
 
-## 5. Live Delivery Guidance & Wayfinding State Machine UI (`ShrutiDeliveryWayfindingCard.kt`)
+## 5. Post-Call Delivery & Logistics Narrative Debrief Card (`ShrutiDeliveryDebriefCard.kt`)
 
-During active call screening for delivery partners (Swiggy, Zomato, Amazon, Blue Dart, Blinkit):
+When the passive in-call vectorizer identifies a delivery or courier interaction (Swiggy, Zomato, Amazon, Blue Dart, Blinkit), it renders a structured post-call debrief card:
 
 ```
 +-----------------------------------------------------------------------+
-|  LIVE DELIVERY SCREENING (Swiggy / Amazon)              [00:42]       |
-|  Current State: Wayfinding Landmark Guidance                          |
+|  DELIVERY CALL DEBRIEF (Swiggy / Amazon)              [14:22]         |
+|  Summary: Package Left at Security Gate                               |
 |                                                                       |
-|  [ Gate 2 Entry ] ──► [ Pool / Clubhouse ] ──► [ Tower 14, Flat 804 ] |
-|                            ▲ (Active Step)                            |
+|  [ Gate 2 Entry ] ──► [ Security Desk ] ──► [ Flat 804 Notification]  |
+|                                                     ▲ (Status: Dropped)|
 |                                                                       |
-|  Landmark Instruction Sent:                                           |
-|  "Enter Gate 2 near clubhouse, take 2nd right past pool to Tower 14"  |
+|  Key Spoken Detail:                                                   |
+|  "Amazon courier arrived at Gate 2 and handed package to guard Ramesh"|
 |                                                                       |
 |  Actions:                                                             |
-|  [ Bridge Call to Speaker ]  [ Send Gate Pass OTP ]  [ Take Over Call]|
+|  [ ▶ Play Voice Debrief ]   [ Send Gate Pass SMS ]   [ Callback Driver]|
 +-----------------------------------------------------------------------+
 ```
 
-1. **Wayfinding State Stepper:** Real-time visual tracking of delivery driver progress (`State 1: Gate Localization` $ightarrow$ `State 2: Turn-by-Turn Wayfinding` $ightarrow$ `State 3: Final Mile Delivery`).
-2. **Barge-In Visual Feedback:** Dynamic pulse indicator showing Silero VAD speech interruption (<32 ms) and instant KV-cache truncation.
+1. **Logistics Stepper:** Visual tracking of delivery milestones identified from the call (`Gate Entry` $\rightarrow$ `Lobby / Security` $\rightarrow$ `Handover Complete`).
+2. **Post-Call Voice Playback:** 1-tap playback of expressive SLM spoken debrief synthesized with speaker attribution and natural prosody.
 3. **One-Tap Escalation Chips:**
-   - `[Bridge Call to Speaker]`: Instant DND breakthrough call bridge to handset speaker when OTP or 3-turn failure occurs.
-   - `[Send Gate Pass OTP]`: Pre-fills gate pass SMS / intent for rapid entry approval.
-   - `[Take Over Call]`: Immediate JNI ring buffer handover to handset microphone/speaker.
+   - `[Play Voice Debrief]`: Streams on-device audio narration of the call context.
+   - `[Send Gate Pass SMS]`: Pre-fills gate pass SMS / intent for rapid entry approval.
+   - `[Callback Driver]`: Opens dialer with the courier's number for instant callback.
