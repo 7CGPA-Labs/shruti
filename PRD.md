@@ -4,197 +4,103 @@
 
 ### 1. Document Control & Executive Summary
 
-* **Project Codename:** Aegis-Voice / S.H.R.U.T.I.
+* **Project Codename:** S.H.R.U.T.I. (Speech-native Hardware Runtime for Ubiquitous Telephony Intelligence)
 * **Target Package:** `org.seven_cgpalabs.shruti`
-* **Target Platforms:** Android 14+ (API Level 34 & 35)
-* **Hardware Tier:** Tier-1 & Tier-2 NPU-equipped SoCs (Snapdragon 8 Gen 2/3/4, MediaTek Dimensity 9200/9300/9400)
-* **Speech-to-Speech Engine:** `Qwen3-Omni-3B` (Quantized via INT4 AWQ)
-* **Document Version:** 2.3.0 (Qwen3-Omni-3B Model Specification)
+* **Target Platforms:** Android 14.0+ (API Level 34 & 35)
+* **Target Hardware:** Devices equipped with dedicated NPUs (Snapdragon 8 Gen 2/3/4, Google Tensor G3/G4, MediaTek Dimensity 9200/9300/9400)
+* **Document Version:** 3.0.0 (Passive Semantic Vector Ingress & Expressive Narrator Architecture)
 * **Status:** Approved Production Specification
 
-#### 1.1 Executive Summary
-Aegis-Voice (S.H.R.U.T.I.) is an on-device, audio-native call screening and conversational intelligence platform for Android. Operating entirely on mobile silicon using an end-to-end Speech-to-Speech (S2S) architecture via ONNX Runtime powered by **`Qwen3-Omni-3B` (INT4 AWQ)**, it bypasses legacy cloud STT $\rightarrow$ LLM $\rightarrow$ TTS pipelines.
+#### 1.1 Executive Summary & Core Paradigm Shift
+Traditional call recording and logging applications save conversations as linear, unindexed audio containers (`.wav`, `.mp3`, `.aac`), resulting in excessive storage consumption, privacy vulnerabilities, and friction when reviewing information.
 
-The platform operates under a strict **Zero-Text, Zero-Audio Persistence** paradigm: no raw audio recordings and no textual transcripts are ever saved to disk. S.H.R.U.T.I. features an intuitive **3-Action Incoming Call UI** (`[Decline]`, `[Answer]`, and `[Screen with S.H.R.U.T.I. AI]`), enabling users to delegate unknown calls to the on-device AI assistant powered by `Qwen3-Omni-3B` with a single tap.
+S.H.R.U.T.I. reimagines conversational logging by replacing raw waveform persistence with **quantized multi-modal mathematical vectors**. Operating strictly as a **passive listener** (the AI never answers or speaks live to callers during calls), the app captures in-call and ambient speech streams, converting them in real time into continuous frames of speaker identity embeddings, acoustic prosodic vectors, and semantic text tokens. 
 
----
-
-### 2. Market Positioning & Competitive Moats
-
-| Capability / Metric | Truecaller Assistant | Google Pixel Call Screen | Carrier CNAP (TRAI) | Aegis-Voice / S.H.R.U.T.I. |
-| :--- | :--- | :--- | :--- | :--- |
-| **Compute Architecture** | Cloud-based SIP forwarding | Hybrid On-Device STT/LLM | Network Switch (SS7/SIP) | 100% On-Device NPU (ONNX) |
-| **Operating Pipeline** | STT $\rightarrow$ Cloud LLM $\rightarrow$ TTS | Cascading STT $\rightarrow$ SLM $\rightarrow$ TTS | Static KYC Lookup | Native Audio S2S (`Qwen3-Omni-3B`) |
-| **End-to-End Latency** | 1,200 ms – 2,500 ms | 600 ms – 900 ms | 0 ms (Call Setup only) | **250 ms – 380 ms** |
-| **Incoming Call UI** | Cloud Screening Popup | Standard 2-button / 1-chip | Native Ringing UI | **3-Action Control (Decline, Answer, Screen AI)** |
-| **Turn-by-Turn Privacy** | Audio streamed to cloud | Transcripts logged locally | Name exposed to caller | **Zero-Audio & Zero-Text Disk Logs** |
-| **Storage Primitive** | Cloud database records | Plaintext local SQLite | Carrier databases | **Non-Invertible Semantic Vectors** |
-| **Play Store SMS Policy** | N/A | Proprietary system app | Network signaling | **Human-in-the-Loop 1909 Intent** |
+Audio frames are completely scrubbed from volatile memory immediately after vector extraction. Post-conversation review is delivered through an **Expressive On-Device Narrator** that reconstructs the dialogue as a dramatic, emotionally nuanced debrief with identity resolution, natural pauses, and vocal inflection, executed entirely on-device via NPU/GPU acceleration.
 
 ---
 
-### 3. Target User Personas & Use Cases
+### 2. Problem Statement & The "Right Way" Approach
 
-#### Persona A: The High-Volume Professional
-* **Profile:** Receives 30–50 calls daily from couriers, vendors, recruitment agents, and unknown business contacts.
-* **Pain Point:** Interruptions during meetings; reluctance to pick up unknown numbers or use privacy-invasive cloud assistants.
-* **Journey:** Inbound call from unknown number $\rightarrow$ 3-Action Caller Screen surfaces $\rightarrow$ User taps `[Screen with S.H.R.U.T.I. AI]` $\rightarrow$ `Qwen3-Omni-3B` model announces mandatory disclosure, screens caller purpose, surfaces Gemini-style overlay, and synthesizes a spoken debrief upon completion.
+| Challenge / Naive Approach | Critical Platform Failure Mode | The "Right Way" Implementation (S.H.R.U.T.I.) |
+| :--- | :--- | :--- |
+| **Pure Acoustic Vector Storage** | Acoustic vectors capture vocal timbre and pitch, but cannot reconstruct textual meaning without storing raw audio. | **Composite Vector Frames:** Store a compound frame: Quantized ASR semantic tokens + 192-d ECAPA-TDNN speaker embeddings + 64-d prosodic vectors + pause deltas. Zero audio saved. |
+| **Cellular Downlink Call Recording** | Android 12+ and carrier basebands silence incoming downlink audio on standard `AudioRecord` APIs without root/OEM signing. | **Dual-Engine Ingress:** Operates as a native VoIP communication app (WebRTC/SIP) for primary call capture, with fallback to `VOICE_COMMUNICATION` mode under `ROLE_DIALER` where carrier hardware permits. |
+| **Continuous 24/7 Wake-Word** | Running continuous mic processing in background exhausts battery in 4–6 hours, keeps Android's privacy indicator active, and gets killed by OS Doze. | **Deliberate Ambient Triggering:** Low-power sensor hardware interrupts (double-tap back gesture $>14\text{ m/s}^2$, Quick Settings Tile, lock-screen widget) activate a 15-second primed wake-word window. |
+| **Continuous Unbatched NPU Execution** | Pushing 20 ms frames continuously to the NPU keeps power rails energized, causing thermal throttling and battery drain. | **Batch-and-Burst ("Race-to-Sleep"):** 1.0-second ring buffers on CPU efficiency cores; burst-processed on NPU in $\le 12\text{ ms}$; NPU powers down between frames ($\le 2\%$ duty cycle). |
+| **Native Android TTS for Drama** | Android system TTS voices are robotic and designed for utility (turn-by-turn navigation), failing at dramatic narrative pauses. | **SSML Prosody Orchestration + Local Neural Fallback:** Prompt-tuned on-device SLM generates rich SSML for native TTS (`Voice.QUALITY_VERY_HIGH`), with support for an embedded local INT8 neural TTS engine (Kokoro/Piper). |
+| **Live Regex Name Parsing** | Hardcoded regex during live calls yields false positives on slang and idioms. | **Two-Tier Identity Resolution:** ContactsContract phone lookup anchors primary contacts; on-device SLM resolves secondary speaker names and vocatives post-call. |
+| **Live Conversational Call Screener** | Interrupting or speaking over callers introduces latency and conversational failure modes. | **Passive Listener Only:** The AI only listens, vectorizes, and tracks speakers; it never speaks to or converses with the caller during live calls. |
+
+---
+
+### 3. User Personas & Core Use Cases
+
+#### Persona A: The Power Caller / Executive
+* **Profile:** Spends 3–5 hours daily on high-stakes calls with vendors, colleagues, and external partners.
+* **Pain Point:** Cannot re-listen to lengthy 45-minute audio recordings; reluctant to use cloud recorders that store sensitive business discussions.
+* **Journey:** User participates in a 45-minute multi-party call. S.H.R.U.T.I. runs silently in the background, extracting composite vectors across 4 distinct speakers with zero audio saved to disk. At call conclusion, a persistent notification provides a 90-second expressive narrative debrief: *"Alex presented the roadmap with steady confidence, but David hesitated for three seconds when addressing the migration timeline..."*
+
+#### Persona B: The Field Professional
+* **Profile:** Constantly on the move, participating in standups and field meetings.
+* **Pain Point:** Needs hands-free ambient meeting logging without draining phone battery or holding the phone.
+* **Journey:** User double-taps the back of the phone during a meeting. The device gives a tactical dual-click haptic pulse, primes a 15-second window, and captures the discussion as math vectors. Speaker names mentioned in the room are bound to speaker vectors, and structured action items are indexed into local vector memory.
 
 ---
 
 ### 4. Functional Requirements (FR)
 
-#### FR-1: Telephony Interception, 3-Action UI & `ROLE_DIALER` Compliance
-* **FR-1.1:** System shall support a **VoIP / SIP Gateway Bridge** via LiveKit WebRTC SDK, handling duplex 16 kHz PCM audio streaming over DoT-compliant carrier SIP DIDs.
-* **FR-1.2 3-Action Incoming Call UI:** When an incoming call arrives, the caller interface (`ShrutiInCallActivity.kt`) shall present three explicit primary user action controls: `[Decline]`, `[Answer]`, and `[Screen with S.H.R.U.T.I. AI]`.
-* **FR-1.3 Full Dialer Requirements:** Interactive dialpad, call history logs, contact picker, and **Instant Emergency Call Pass-Through** (`112` / `911` / `100` / `101` / `102` route directly to PSTN without AI screening).
+#### FR-01: Ephemeral Vectorization Pipeline
+* **FR-01.1:** The app shall ingest single-channel 16 kHz PCM audio directly into non-heap memory (`DirectByteBuffer`).
+* **FR-01.2:** Audio data must be processed within a 1.0-second sliding window and immediately overwritten. No file write operations for `.wav`, `.mp3`, `.m4a`, or `.aac` shall ever occur.
+* **FR-01.3:** Output storage format shall be a flat vector binary (`.vecstream` via Google FlatBuffers), containing the unified tuple:
+  $$v_t = [e_{\text{speaker}} (192\text{-d}), z_{\text{prosody}} (64\text{-d}), w_{\text{semantic}} (\text{16-bit tokens}), \Delta_{\text{pause}} (\text{16-bit int})]$$
 
-#### FR-2: Pure Audio-Native Speech-to-Speech Screening & AI Transparency
-* **FR-2.1:** System must completely bypass intermediate text token generation during active screening dialogue.
-* **FR-2.2:** Input audio digitized into discrete acoustic codec tokens (Mimi / WavTokenizer at 50 Hz frame rates).
-* **FR-2.3 Speech-to-Speech SLM Model:** Autoregressive **`Qwen3-Omni-3B`** (quantized via INT4 AWQ) executing on Qualcomm QNN HTP NPU / MediaTek NeuroPilot NNAPI generating direct acoustic codec response tokens.
-* **FR-2.4 Dynamic Barge-In:** Silero VAD detects caller interruption within 50 ms and flushes downstream synthesis queues ($\le 40\text{ ms}$).
-* **FR-2.5 Mandatory AI Synthetic Media Disclosure:** `Qwen3-Omni-3B` model's first spoken utterance to the caller MUST begin with:
-  `"I am an automated voice assistant screening this call for [User Name]. Please state the reason for your call."`
+#### FR-02: Heterogeneous Streaming Diarization
+* **FR-02.1:** Maintain continuous speaker diarization across sessions exceeding 60 minutes with $O(1)$ memory growth.
+* **FR-02.2:** Utilize Online Cosine Centroid Tracking with a dynamic similarity threshold ($\tau=0.72$) and exponential moving average ($\alpha=0.85$) to update speaker clusters.
+* **FR-02.3:** Limit active cluster tracking to a maximum of 8 simultaneous speakers per session to cap vector state memory below 2 MB.
 
----
+#### FR-03: Two-Tier Identity Resolution
+* **FR-03.1 (Deterministic OS Anchor):** Query `ContactsContract.PhoneLookup` using the remote URI handle from `Call.Details` to resolve known 1-on-1 contact identities prior to call connection.
+* **FR-03.2 (Conversational NER & Vocative Binding):** For multi-speaker conferences and unknown numbers, pass the transcribed semantic tokens to a post-call on-device Small Language Model (SLM) pass to bind self-introductions (*"Hey, this is Sarah"*) and vocative addresses (*"Thanks, Mark"*) to their corresponding speaker cluster IDs.
 
-### 5. Non-Functional Requirements (NFR) & Compliance
+#### FR-04: Expressive Debriefing Engine
+* **FR-04.1:** An on-device SLM (Gemma 2 2B / Qwen3 INT4) shall translate the `.vecstream` into an SSML narrator script with custom prosody, pitch, rate, and break intervals.
+* **FR-04.2:** Playback shall interface with `android.speech.tts.TextToSpeech`, dynamically querying and selecting installed high-quality, offline system voice packs (`Voice.QUALITY_VERY_HIGH`), with fallback to local INT8 neural TTS (Kokoro/Piper).
+* **FR-04.3:** The debrief shall be launchable via:
+  1. In-app call log view.
+  2. Interactive Android App Widget (`AppWidgetProvider`).
+  3. Android Quick Settings Tile (`TileService`).
 
-#### NFR-1: Turnaround Latency Budgets
-* **NFR-1.1 End-to-End Latency:** Duration between caller speech end and initial AI response frame playback from `Qwen3-Omni-3B` must not exceed **380 ms** on Snapdragon 8 Gen 2+.
-* **NFR-1.2 Memory Footprint:** The `Qwen3-Omni-3B` INT4 AWQ model weight allocation must consume $\le 620\text{ MB}$ of system RAM.
+#### FR-05: Ambient Triggering Infrastructure
+* **FR-05.1:** Register a low-power `SensorEventListener` to identify physical double-tap gestures via accelerometer variance spikes ($>14.0\text{ m/s}^2$ within a 600 ms window).
+* **FR-05.2:** When primed via gesture or Quick Settings, activate a 15-second keyword spotting (KWS) window for *"Hey Shruti"* using an INT8-quantized micro-model.
+* **FR-05.3:** Provide immediate tactile confirmation of recording state transitions using Android Vibrator (`EFFECT_HEAVY_CLICK` on start, `EFFECT_DOUBLE_CLICK` on stop).
 
-
-
----
-
-### 6. First-Time Setup & Double-Confirmation (Voice Onboarding)
-
-Because S.H.R.U.T.I. is designed as a zero-text, voice-first system, onboarding is conducted as an interactive spoken calibration session. This accomplishes two things simultaneously: it collects the necessary grounding facts (address, landmarks, delivery rules) and extracts the acoustic baseline for the user's voice so the assistant recognizes the owner during debriefs.
-
-```
-[ User Launches App ] ──► "Namaste! Let's set up S.H.R.U.T.I. Who should I say I am assisting?"
-                                         │
-                                         ▼
-                            [ Step 1: Identity & Name ]
-                                         │
-                                         ▼
-                 [ Step 2: Address Specifics (Tower, Flat, Floor) ]
-                                         │
-                                         ▼
-                 [ Step 3: Navigation Landmarks & Gate Protocol ]
-                                         │
-                                         ▼
-                 [ Step 4: Handover Rules (Guard vs. Doorstep) ]
-                                         │
-                                         ▼
-               [ Step 5: Double-Confirmation Readback & Affirmation ]
-                                         │
-                  User says: "Yes, that's correct" / "Haan, theek hai"
-                                         │
-                                         ▼
-            Compile into Encrypted System Prefix (E_sys)
-```
-
-#### 6.1 The Conversational Setup Script
-
-1. **Owner Identification:**
-   * *Assistant:* "Hello! I am ready to set up your call assistant. First, what name should I use when answering calls for you?"
-   * *User:* "Chandrashekar, or just Gagan."
-
-2. **Detailed Location & Tower/Door:**
-   * *Assistant:* "Got it, Gagan. What is your exact apartment or house location, including building name, tower, and flat number?"
-   * *User:* "Sobha Dream Acres, Tower 14, Flat 804 on the 8th floor."
-
-3. **Wayfinding Landmarks & Gate Policy:**
-   * *Assistant:* "If a delivery driver is entering from the main gate, what landmarks or directions should they follow to find your tower?"
-   * *User:* "Enter through Gate 2 near the clubhouse. Take the second right past the swimming pool. Tower 14 is the yellow building on the left."
-
-4. **Package Handover & Gate Rules:**
-   * *Assistant:* "If you are unavailable, should they leave packages at the main gate security, outside your flat door, or call you directly?"
-   * *User:* "Leave prepaid parcels with the lobby security guard. For cash on delivery or OTP packages, tell them to ring my doorbell."
-
-5. **The Double-Confirmation Turn (The Guardrail):**
-   * *Assistant:* "Let me confirm your details: I am assisting Gagan at Sobha Dream Acres, Tower 14, Flat 804. Directions: Enter Gate 2 near clubhouse, take the second right past the pool to the yellow building. Prepaid deliveries go to lobby security, OTP packages come to the door. Did I get everything right?"
-   * *User:* "Yes, that is correct."
-   * *Assistant:* "Setup complete. S.H.R.U.T.I. is now active and protecting your calls."
-
-#### 6.2 Storage Architecture for Setup Data
-
-Under the **Zero-Persistence / Ciphered Vector** model:
-* **System Prompt Tensor:** The confirmed facts are mapped through the model's text encoder once to produce a static **System Conditioning Embedding Tensor** ($\mathbf{E}_{	ext{sys}} \in \mathbb{R}^{L 	imes 2048}$).
-* **Hardware Encryption:** $\mathbf{E}_{	ext{sys}}$ is encrypted via AES-256-GCM using the Android KeyStore master key and saved as `profile_vector.blob` in SQLCipher.
-* **Deterministic Rules (Fallbacks):** Exact numerical tokens (Flat `804`, Tower `14`, Gate `2`) are stored in an encrypted key-value table so that deterministic values are never subject to neural hallucinations during active calls.
+#### FR-06: Passive In-Call Audio Ingress
+* **FR-06.1:** System shall operate strictly as a passive listener during active phone calls. The AI never synthesizes speech or transmits audio to the remote caller.
+* **FR-06.2:** Support bi-directional digital capture via built-in WebRTC VoIP engine and native telecom `InCallService` under `ROLE_DIALER` (`MediaRecorder.AudioSource.VOICE_COMMUNICATION`).
 
 ---
 
-### 7. Live Delivery Guidance: How the LLM Navigates the Driver
+### 5. Non-Functional Requirements (NFR) & Performance Budgets
 
-When a delivery partner (Swiggy, Zomato, Amazon, Blue Dart, Blinkit) calls, they are often riding a two-wheeler, dealing with heavy traffic or wind noise, and speaking rapid, code-mixed Hinglish/regional slang (*"Bhaiyya kahan aana hai?"*, *"Gate pe security entry nahi de raha"*).
+#### NFR-1: Tri-Tier Compute Budgets
+* **NPU Mode (Primary):** $\le 12\text{ ms}$ compute burst per 1000 ms audio chunk (Peak energy efficiency: ~3.5 TOPS/Watt).
+* **GPU OpenCL Mode (Secondary):** $\le 28\text{ ms}$ compute burst per 1000 ms audio chunk (Targeting Adreno 7xx / Mali-G7xx; ~1.8 TOPS/Watt). Persistent binary kernel caching allocated up to 8 MB in `codeCacheDir/litert_opencl`.
+* **CPU Mode (Fallback):** $\le 85\text{ ms}$ compute on 2x LITTLE efficiency cores via XNNPACK (`THREAD_PRIORITY_BACKGROUND`).
 
-The model handles navigation through an **anchored wayfinding state machine** inside the S2S loop.
+#### NFR-2: Storage & Memory Budgets
+* **Storage Footprint:** Complete vector stream must consume $\le 180\text{ KB}$ per minute of active conversation ($\ge 85\%$ reduction compared to 16 kHz 16-bit PCM).
+* **Model Footprint:** Dual-head audio vectorizer INT8 model file $\le 500\text{ KB}$ (fitting 100% inside on-die NPU SRAM/TCM cache).
 
-```
-[ Inbound Call Ringing ]
-          │
-          ▼
-[ Load Profile Prefix E_sys ]  ──► (Tower 14, Flat 804, Gate 2, Clubhouse, Pool)
-          │
-          ▼
-Assistant: "Hello, this is Gagan's assistant. Are you calling regarding a delivery?"
-          │
-          ▼
-Driver: "Haan bhaiyya, main society gate pe hoon, location nahi samajh aa raha."
-          │
-          ▼
-[ State 1: Gate Localization ]
-Assistant: "Aap kaunse gate pe khade ho? Gate 1 ya Gate 2?"
-          │
-          ▼
-Driver: "Gate 1 pe hoon."
-          │
-          ▼
-[ State 2: Turn-by-Turn Wayfinding ]
-Assistant: "Theek hai. Gate 1 se seedha aaiye, clubhouse cross karke right lijiye.
-            Aage swimming pool aayega, uske paas Tower 14 yellow building hai."
-          │
-          ▼
-Driver: "Lift se kaunse floor aana hai?"
-          │
-          ▼
-[ State 3: Final Mile Delivery ]
-Assistant: "8th floor, Flat 804. Agar prepaid packet hai toh lobby guard ke paas
-            bhi drop kar sakte ho."
-          │
-          ▼
-Driver: "Theek hai bhaiyya, guard ko de raha hoon."
-          │
-          ▼
-[ Call Terminates ] ──► Extract 512-d intent vector ──► Encrypt to SQLCipher ──► Wipe RAM
-```
+#### NFR-3: Battery Consumption & Thermal Limits
+* **Standby Window:** Background sensor and gesture monitoring must consume $<1.5\%$ battery per 8-hour standby window.
+* **Active Processing:** Continuous vector recording must consume $<4.5\%$ battery per hour.
+* **Thermal Throttling:** Dynamic extension of chunking window from 1.0s to 2.5s upon receiving `THERMAL_STATUS_MODERATE`.
 
-#### 7.1 Key Engineering Pillars for Navigation Handling
-
-1. **Atomic, Single-Instruction Pacing:** Delivery agents cannot process long paragraphs over noisy cellular audio. The model's fine-tuned screening persona is constrained to deliver **one or two landmark instructions per turn**:
-   * *Ineffective:* "Enter Gate 2, take second right past the pool, then left at the clubhouse, find Tower 14, take lift to 8th floor Flat 804."
-   * *S.H.R.U.T.I. Pattern:* "Gate 2 se enter karke pool ke paas second right lijiye. Wahan Tower 14 milega." (Waits for driver acknowledgement before giving flat/floor info).
-
-2. **Native Code-Switching & Dialect Grounding:** The model does not force the driver into formal speech. If the driver asks in Kannada (*"Sir, address sigtha illa, elli barbeku?"*), the Whisper encoder extracts the semantic meaning, and the Qwen backbone paired with regional prosody tokens guides them in Kannada:
-   * *"Gate 2 inda olage banni, swimming pool pakka Tower 14 ide, Flat 804."*
-
-3. **Low-Latency Interruption (Barge-In) During Directions:** Drivers constantly interrupt mid-sentence when spotting a landmark or talking to security:
-   * *Assistant:* "Aap seedha aakar round-about se right—"
-   * *Driver (Interrupts):* "Haan haan, clubhouse dikh gaya mujhe!"
-   * *Execution:* Silero VAD flags driver speech in $<32	ext{ ms}$, the native C++ ring buffer drops the remaining direction audio via `memset_s`, the KV-cache truncates the unplayed tokens, and the assistant instantly responds to the update: *"Haan, clubhouse ke bagal wala building hi Tower 14 hai."*
-
-4. **The "Security Guard Intercom" Sub-Routine:** If the driver states that security is refusing entry:
-   * *Driver:* "Security gate pass mang raha hai / register mein entry chahiye."
-   * *Assistant:* "Security ko boliye Flat 804, Tower 14 mein Gagan ke yahan delivery hai. Entry approve karwayenge."
-
-5. **Escalation & Call Bridging (Safety Net):** The assistant does not trap callers in an endless loop. If an edge case occurs, the model breaks out and alerts the owner:
-   * **Escalation Triggers:**
-     * Driver asks for an OTP (Cash on Delivery / high-value parcel).
-     * Driver cannot find the tower after 3 turns.
-     * Driver explicitly demands: *"User se baat karao / call transfer karo."*
-   * **Action:** The assistant states: *"Main Gagan ko direct ring connect kar raha hoon, ek second hold kijiye."* The app triggers an urgent high-priority heads-up notification on the phone, breaking through DND to bridge the call to the handset speaker.
+#### NFR-4: Privacy & Platform Compliance
+* **Zero Waveform Leakage:** Audio data resides strictly in volatile non-heap RAM (`DirectByteBuffer`) and is scrubbed via `memset_s` immediately post-inference. Zero audio files saved to flash.
+* **Air-Gapped Sandbox:** Core ML vectorization and SLM narrator modules strictly exclude `android.permission.INTERNET`.
+* **Google Play Policy:** Background foreground service declared under `foregroundServiceType="microphone"` accompanied by an active, un-dismissible user notification.

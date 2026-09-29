@@ -146,6 +146,7 @@ Ensure Android NDK `r26c` and CMake `3.22.1` are installed in your Android SDK e
 - [Product Requirements Document (PRD)](PRD.md)
 - [Technical Requirements Document (TRD)](TRD.md)
 - [System Architecture Specification](architecture.md)
+- [Dual-Head INT8 QAT Vectorizer Notebook](notebooks/dual_head_vectorizer_qat.ipynb)
 - [Model Training & Surgery Plan](TRAINING_PLAN.md)
 - [Implementation Roadmap & Milestones](milestone_tasks.md)
 - [UI/UX Design Specification](ui_design.md)
