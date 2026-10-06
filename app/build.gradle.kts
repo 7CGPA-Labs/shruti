@@ -23,7 +23,7 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags("-std=c++20", "-O3", "-Wall", "-Werror", "-ffast-math")
-                arguments("-DANDROID_STL=c++_shared")
+                arguments("-DANDROID_STL=c++_shared", "-DGGML_VULKAN=ON")
             }
         }
     }
@@ -63,6 +63,7 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.5")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.5")
     implementation("androidx.activity:activity-compose:1.9.2")
 
     // Compose BOM
@@ -72,6 +73,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
 
     // SQLCipher Encryption
     implementation("net.zetetic:android-database-sqlcipher:4.5.4")
@@ -80,7 +82,7 @@ dependencies {
     // LiveKit WebRTC SDK
     implementation("io.livekit:livekit-android:2.7.0")
 
-    // ONNX Runtime Mobile
+    // ONNX Runtime Mobile (Auxiliary CAM++ Diarizer on CPU)
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.0")
 
     testImplementation("junit:junit:4.13.2")

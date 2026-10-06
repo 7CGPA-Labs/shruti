@@ -13,6 +13,7 @@ add_library(
     shruti_native_engine
     SHARED
     src/main/cpp/src/shruti_ring_buffer.cpp
+    src/main/cpp/src/shruti_vulkan_bridge.cpp
     src/main/cpp/src/shruti_jni_bridge.cpp
 )
 

@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Permissions -->
+    <!-- Telephony & Audio Permissions -->
     <uses-permission android.permission.INTERNET />
     <uses-permission android.permission.RECORD_AUDIO />
     <uses-permission android.permission.READ_PHONE_STATE />
     <uses-permission android.permission.SEND_SMS />
     <uses-permission android.permission.READ_CONTACTS />
+    <uses-permission android.permission.FOREGROUND_SERVICE />
+    <uses-permission android.permission.FOREGROUND_SERVICE_MICROPHONE />
+    <uses-permission android.permission.POST_NOTIFICATIONS />
 
     <application
         android:allowBackup="false"
@@ -25,6 +28,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Passive In-Call Listener Service -->
+        <service
+            android:name=".service.ShrutiCallListenerService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
     </application>
 
