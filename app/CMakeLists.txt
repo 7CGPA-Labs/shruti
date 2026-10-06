@@ -18,9 +18,13 @@ add_library(
 
 find_library(log-lib log)
 find_library(android-lib android)
+find_library(vulkan-lib vulkan)
 
+# llama.cpp Vulkan Backend linkage (-DGGML_VULKAN=ON)
 target_link_libraries(
     shruti_native_engine
     ${log-lib}
     ${android-lib}
+    ${vulkan-lib}
 )
+

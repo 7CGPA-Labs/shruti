@@ -24,6 +24,7 @@ PROJECT_DIRS = [
     "data",
     "data/audio_scratch",
     "checkpoints",
+    "gguf_exports",
     "onnx_exports",
     "voices",
 ]

@@ -5,15 +5,15 @@
 ### 1. System Engineering Stack & Target Environment
 
 * **Target Package:** `org.seven_cgpalabs.shruti`
-* **Target OS:** Android 14.0 (API 34), Android 15.0 (API 35)
+* **Target OS:** Android 14.0 (API 34), Android 15.0 (API 35) (Compatible down to Android 10 / API 29 via Vulkan 1.1)
 * **NDK Level:** NDK r26c+ (C++20 standard)
-* **Build System:** Gradle Kotlin DSL (`build.gradle.kts`) + CMake 3.22.1
-* **ML Inference Framework:** LiteRT (TensorFlow Lite v2.16+) with GPU (OpenCL) & Qualcomm QNN HTP NPU delegates + ONNX Runtime Mobile v1.19+ fallback
-* **SLM / Debrief Engine:** `Qwen3-Omni-3B` (Pruned to ~1.45B params, quantized via INT4 AWQ) / Local Kokoro / Android TTS
+* **Build System:** Gradle Kotlin DSL (`build.gradle.kts`) + CMake 3.22.1 (`-DGGML_VULKAN=ON`)
+* **ML Inference Framework:** **`llama.cpp` + GGML (C++20)** with native Vulkan compute backend (`ggml-vulkan.cpp`) linking Android system `libvulkan.so`
+* **Model Packaging:** Unified **GGUF format** (quantized via `llama-quantize` to `Q4_K_M` and `Q8_0`)
+* **SLM / Debrief Engine:** Pruned `Qwen3-Omni-3B` (~1.45B params, quantized to `Q4_K_M` GGUF) / Local Kokoro / Android TTS
 * **Hardware Acceleration Backends:**
-  * **NPU:** Qualcomm QNN HTP (Hexagon Tensor Processor) / MediaTek NeuroPilot APU (Tier 1 Dual-Head Vectorizer)
-  * **GPU:** Qualcomm Adreno / ARM Mali via OpenCL (Tier 2 Streaming Whisper / SLM Encoder)
-  * **CPU:** ARM NEON SIMD with XNNPACK (Tier 3 Silero VAD v5 + C++ Lockless Ring Buffer)
+  * **GPU (Primary):** Universal Khronos Vulkan 1.1+ Compute Shaders (Qualcomm Adreno 6xx/7xx/8xx, ARM Mali-Gxx / Immortalis, Imagination PowerVR, Samsung Xclipse / AMD RDNA2)
+  * **CPU (Fallback):** Multithreaded ARM NEON SIMD with GGML CPU execution (`ggml-cpu`) + Silero VAD v5 + Lockless SPSC C++ Ring Buffer
 * **Telephony & Ingress:** Android Telecom Framework (`ROLE_DIALER` Default Dialer UI) / `InCallService` + `VOICE_COMMUNICATION` passive dual-channel ingress
 * **Storage & Serialization:** Zero-Copy FlatBuffers (`.vecstream`) + SQLCipher v4.5.4 (FIPS 140-2 compliant AES-256-GCM) + Android Keystore StrongBox
 
@@ -42,12 +42,12 @@
           └────────────────────┬───────────────────┘
                                │
             ┌──────────────────┴──────────────────┐
-            ▼ (Mel: 1, 50, 80)                    ▼ (Acoustic Waveform)
+            ▼ (Log-Mel: 1, 50, 80)                ▼ (Acoustic Waveform)
 ┌────────────────────────────────────────┐ ┌────────────────────────────────────────┐
-│ Tier 1: LiteRT NPU Dual-Head Vectorizer│ │ Tier 2: LiteRT GPU (OpenCL) Whisper    │
+│ Tier 1: Vulkan Dual-Head Vectorizer    │ │ Tier 1: Vulkan Whisper Audio Encoder   │
 │ * 192-d Speaker d-vector (e_spk)       │ │ * 128-d Semantic Intent (w_sem)        │
 │ * 64-d Prosody/Energy Dynamics (z_pros)│ │ * 1-d Pause Delta (Δ_pause)            │
-│ INT8 QAT (~418 KB, < 1.8 ms)           │ │ INT8 OpenCL (~38 MB, < 18 ms)          │
+│ Q8_0 GGUF (~420 KB, < 1.6 ms)          │ │ Q8_0 GGUF (~38 MB, < 14 ms)            │
 └──────────────────┬─────────────────────┘ └───────────────────┬────────────────────┘
                    │                                           │
                    └─────────────────────┬─────────────────────┘
@@ -68,8 +68,9 @@
                                          │
                                          ▼
                          ┌───────────────────────────────┐
-                         │ Qwen3-Omni-3B Debrief SLM     │
-                         │ * Reconstructs conversation   │
+                         │ llama.cpp Vulkan SLM Narrator │
+                         │ * Pruned Qwen3-Omni (Q4_K_M)  │
+                         │ * Offloaded to Vulkan (-ngl 99│
                          │ * Synthesizes SSML narrative  │
                          └───────────────────────────────┘
 ```
@@ -78,10 +79,10 @@
 
 | Component | Model Architecture | Parameters | Quantization | Runtime EP | Memory Footprint | Latency Budget |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Voice Activity Detector** | Silero VAD v5 | 1.8 M | INT8 | CPU (XNNPACK) | ~2.5 MB | < 2.5 ms / 32ms chunk |
-| **Tier 1 Dual-Head Vectorizer** | Dual-Head Conv1D/GRU | 420 K | INT8 QAT | LiteRT NPU (QNN HTP) | ~418 KB | < 1.8 ms / 500ms chunk |
-| **Tier 2 Semantic Encoder** | Streaming Whisper Tiny | 38 M | INT8 | LiteRT GPU (OpenCL) | ~38 MB | < 18 ms / chunk |
-| **Post-Session SLM Narrator** | Pruned `Qwen3-Omni-3B` | 1.45 B | INT4 AWQ | LiteRT / QNN NPU | ~725 MB | < 25 ms / token |
+| **Voice Activity Detector** | Silero VAD v5 | 1.8 M | INT8 | CPU (ARM NEON) | ~2.5 MB | < 2.5 ms / 32ms chunk |
+| **Dual-Head Vectorizer** | Dual-Head Conv1D/GRU | 420 K | Q8_0 GGUF | Vulkan GPU (`ggml-vulkan`) | ~420 KB | < 1.6 ms / 500ms chunk |
+| **Semantic Audio Encoder** | Streaming Whisper Tiny | 38 M | Q8_0 GGUF | Vulkan GPU (`ggml-vulkan`) | ~38 MB | < 14 ms / chunk |
+| **Post-Session SLM Narrator** | Pruned `Qwen3-Omni-3B` | 1.45 B | Q4_K_M GGUF | `llama.cpp` Vulkan GPU | ~725 MB | < 22 ms / token |
 
 #### 2.2 Post-Session Expressive Narrative Debrief Prompt Contract
 System prompt contract for `Qwen3-Omni-3B` during debrief generation:

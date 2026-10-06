@@ -7,7 +7,7 @@ To build a custom model tailored specifically for **S.H.R.U.T.I.**, you do not n
 **Qwen3-Omni (0.5B or 1.5B)** is the optimal backbone for this project.
 
 * **Multilingual & Indic Token Coverage:** Telephony calls in India heavily feature code-switching (*Hinglish*, regional accents, transliterated Hindi/Kannada/Tamil). Qwen's tokenizer and pretraining corpus represent non-Latin scripts and Asian phonetics with substantially lower perplexity and fewer token splits than Qwen3-Omni-3B or SmolLM2.
-* **Parameter & Memory Budget:** At INT4, the 0.5B model occupies **~350 MB**, leaving headroom for audio codecs and VAD within the mobile NPU's memory envelope. If you target premium flagships, the 1.5B variant (**~850 MB**) provides superior reasoning for ambiguous caller intent.
+* **Parameter & Memory Budget:** At Q4_K_M quantization, the 0.5B model occupies **~350 MB**, and the pruned 3B model (22 layers, ~1.45B params) occupies **~725 MB**, leaving substantial headroom for audio codecs and VAD within the mobile Vulkan GPU VRAM and unified system RAM envelope. If you target premium flagships, the 1.5B variant (**~850 MB**) provides superior reasoning for ambiguous caller intent.
 
 
 * **Proven Audio-Adapter Compatibility:** Community frameworks (such as Mini-Omni) have already proven the viability of wiring Whisper encoders and discrete acoustic heads directly into Qwen's transformer layers.
@@ -92,20 +92,17 @@ Training requires a single rented GPU (e.g., 1x NVIDIA A100 or H100 via RunPod o
 
 
 
-#### Step 4: ONNX Export and Mobile NPU Compilation
+#### Step 4: GGUF Model Export & `llama.cpp` Vulkan Quantization
 
-1. **Export Sub-Graphs:**
-* `whisper_encoder.onnx` (Dynamic audio sequence input $\to$ feature output).
-* `qwen3_omni_backbone_with_kv.onnx` (Audio tokens + prompt prefix $\to$ hidden states + audio token logits).
-* `snac_decoder.onnx` (Discrete acoustic token codes $\to$ 16 kHz PCM audio output).
+1. **Export Sub-Graphs to GGUF / ONNX:**
+* `whisper_encoder.gguf` / `whisper_encoder.onnx` (Dynamic audio sequence input $\to$ feature output).
+* `qwen3_omni_pruned.gguf` (Audio features + prompt prefix $\to$ hidden states + audio token logits).
+* `snac_decoder.gguf` / `snac_decoder.onnx` (Discrete acoustic token codes $\to$ 16 kHz PCM audio output).
+* `dual_head_vectorizer.gguf` (Mean-pooled hidden states $\to$ 512-d intent vector + 256-d prosody vector).
 
+2. **Quantize:** Use `llama-quantize` to quantize the pruned Qwen backbone to **`Q4_K_M`** (~725 MB) and vectorizer / audio heads to **`Q8_0`** (~420 KB) for high-fidelity numerical stability.
 
-2. **Quantize:** Use `onnxruntime-genai` or Qualcomm AI Engine Direct (QNN SDK) to quantize the Qwen backbone to **INT4 (AWQ or GPTQ)** and the audio codec to **INT8**.
-
-
-3. **Validate on Hardware:** Profile execution providers (`QNNExecutionProvider` on Qualcomm, `NNAPI` / `XNNPACK` fallback) to verify end-to-end token generation stays under the 380 ms latency budget.
-
-
+3. **Validate on Hardware:** Profile execution backend (`ggml-vulkan` on Qualcomm Adreno, ARM Mali, Samsung Xclipse, or multithreaded ARM NEON CPU fallback) to verify end-to-end token generation stays within latency budgets ($\le 25\text{ ms}$/token for debrief synthesis).
 
 ---
 
@@ -114,7 +111,7 @@ Training requires a single rented GPU (e.g., 1x NVIDIA A100 or H100 via RunPod o
 * **Training Framework:** PyTorch + Hugging Face Transformers + Torchtune / Unsloth (for fast Qwen fine-tuning).
 * **Reference Codebase:** Fork [`gpt-omni/mini-omni`](https://github.com/gpt-omni/mini-omni?utm_source=gemini) as the base training pipeline (it already contains the Whisper $\to$ Qwen $\to$ SNAC loss functions).
 * **Audio Codec:** **SNAC (Multi-Scale Neural Audio Codec)** or **Kyutai Mimi** (available on Hugging Face).
-* **Deployment:** `onnxruntime-mobile` with Qualcomm QNN Execution Provider.
+* **Deployment:** `llama.cpp` + Vulkan (`ggml-vulkan`, `libvulkan.so`) with multithreaded ARM NEON CPU fallback.
 
 In an audio-native system like **S.H.R.U.T.I.**, handling interruptions (barge-in) requires solving two distinct problems:
 
@@ -129,7 +126,7 @@ Here is how to architect, implement, and train the interruption feature across t
 
 ### Layer 1: The Fast-Path DSP Circuit (Stopping the Voice in $< 40\text{ ms}$)
 
-You cannot wait for the 1B SLM or NPU to "decide" whether to stop talking—neural inference is too slow for instantaneous conversational cuts. The stop mechanism must run entirely on the native C++ DSP layer on CPU.
+You cannot wait for the SLM or mobile GPU to "decide" whether to stop talking—neural inference is too slow for instantaneous conversational cuts. The stop mechanism must run entirely on the native C++ DSP layer on CPU.
 
 ```
                [ Assistant Speaking: Outbound Audio Stream ]
@@ -143,10 +140,10 @@ You cannot wait for the 1B SLM or NPU to "decide" whether to stop talking—neur
                            │
        ┌───────────────────┴───────────────────┐
        ▼                                       ▼
-1. Audio Output Ring Buffer             2. ONNX Generation Loop
+1. Audio Output Ring Buffer             2. llama.cpp Generation Loop
    - Flush unplayed PCM frames             - Set atomic `cancel_flag = true`
    - Zero out memory (memset_s)            - Abort current token loop
-   - Uplink muted within 25-35 ms
+   - Audio muted within 25-35 ms
 
 ```
 
@@ -238,17 +235,9 @@ Prompt Qwen to generate a response tailored to the interruption:
  | $< 5\text{ ms}$ | Flush outgoing PCM frames via `memset_s`.
 
  |
-| **3. Inference Halt** | ONNX Runtime Session | NPU (QNN)
-
- | $< 10\text{ ms}$ | Break token generation loop. |
-| **4. State Sync** | KV-Cache Manager | RAM / NPU
-
- | $< 2\text{ ms}$ | Truncate unplayed token keys/values. |
-| **5. Turn Recovery** | Audio Encoder $\to$ Qwen | NPU (QNN)
-
- | $\sim 75\text{ ms}$<br> | Ingest new caller audio and begin new reply.
-
- |
+| **3. Inference Halt** | llama.cpp Generation Loop | Mobile GPU (Vulkan) / CPU | $< 10\text{ ms}$ | Break token generation loop. |
+| **4. State Sync** | KV-Cache Manager | RAM / Vulkan VRAM | $< 2\text{ ms}$ | Truncate unplayed token keys/values. |
+| **5. Turn Recovery** | Audio Projector $\to$ Qwen | Mobile GPU (Vulkan) | $\sim 75\text{ ms}$ | Ingest new audio features and begin responsive reply. |
 
 **Total Interruption Response Time:** Under **$40\text{ ms}$** to silence the assistant, and under **$350\text{ ms}$** to begin speaking the responsive reply.
 
@@ -421,20 +410,20 @@ Ship the app with **4 curated presets** stored in `assets/voices/`:
 | **Preset 3: "Priya"** | Neutral, gentle, clear | Regional callers & service confirmations | Subtle South-Indic cadence; balanced tone optimized for 16 kHz phone audio. |
 | **Preset 4: "Kabir"** | Friendly, casual | Standard everyday debriefs | Relaxed, everyday conversational Indian English/Hinglish. |
 
-Each preset is just a static **2,048-byte binary file** ($\mathbb{R}^{512}$ Float32 array) bundled in the APK, requiring **zero extra storage footprint** and **zero runtime NPU compute** to load.
+Each preset is just a static **2,048-byte binary file** ($\mathbb{R}^{512}$ Float32 array) bundled in the APK, requiring **zero extra storage footprint** and **zero runtime GPU compute** to load.
 
 ---
 
 ### 3-Step Pipeline to Add Them to the Codebase
 
 1. **Extract Reference Vectors (Offline Build Step):**
-Take a 5-second clean audio sample from *Indic Parler-TTS* or *Veena*, run it through an ONNX speaker encoder (like ECAPA-TDNN), and save the 512-d normalized float vector as `aditi.bin`.
+Take a 5-second clean audio sample from *Indic Parler-TTS* or *Veena*, run it through a speaker encoder (like ECAPA-TDNN), and save the 512-d normalized float vector as `aditi.bin`.
 2. **Bundle in Assets:**
 Place the `.bin` files inside the Android app directory: `app/src/main/assets/voices/`.
 3. **Condition the C++ Ring Buffer:**
-When a call begins, read the selected voice vector from assets and pass its pointer to the SNAC ONNX decoder session via JNI:
+When a debrief turn begins, read the selected voice vector from assets and pass its pointer to the SNAC decoder session via JNI:
 ```cpp
-// JNI hook inside shruti_onnx_bridge.cpp
+// JNI hook inside shruti_vulkan_bridge.cpp
 void set_speaker_preset(const float* speaker_embedding_data, size_t dim) {
     // Bind embedding tensor to SNAC acoustic decoder session
     snac_decoder_session->set_conditioning_vector(speaker_embedding_data, dim);
@@ -668,7 +657,7 @@ The app handles regional Indian languages seamlessly while ensuring that disk st
 
 ## Long Multi-Person Conversation & Vector Trajectory Architecture
 
-Running long-duration (10 to 60+ minutes), multi-speaker audio on an on-device mobile NPU introduces three architectural bottlenecks: **speaker separation (diarization)**, **KV-cache memory limits**, and **vector capacity limits (semantic smearing)**.
+Running long-duration (10 to 60+ minutes), multi-speaker audio on an on-device mobile GPU via Vulkan introduces three architectural bottlenecks: **speaker separation (diarization)**, **KV-cache memory limits**, and **vector capacity limits (semantic smearing)**.
 
 ```
 Long Multi-Person Audio (20+ mins)
@@ -680,7 +669,7 @@ Long Multi-Person Audio (20+ mins)
 [ 30-Second Sliding Window Ingestion ]   ──► Flushes KV-Cache every turn via memset_s (Constant ~450MB RAM)
                 │
                 ▼
-[ Qwen3-Omni S2S Backbone (NPU) ]
+[ Qwen3-Omni S2S Backbone (llama.cpp / Vulkan) ]
                 │
                 ▼
 [ Hierarchical Vector Pooling ]          ──► Trajectory Matrix: M_session = [v₁, v₂, ..., v_K]ᵀ ∈ ℝ^(K × 512)
@@ -731,20 +720,20 @@ Decrypted Vector Trajectory ──► Multi-Vector Soft Prompt ──► Spoken 
 
 * **Target Environment:** Google Colab (Free T4 GPU / Colab Pro A100 or L4 instance).
 * **Target Python Version:** Python 3.10 / 3.11.
-* **Phase Objective:** Build a working end-to-end prototype of the S.H.R.U.T.I. pipeline in Python. This phase verifies model adaptation, synthetic data training, zero-text semantic vector extraction, and multi-part ONNX export before porting to Android NDK/C++.
+* **Phase Objective:** Build a working end-to-end prototype of the S.H.R.U.T.I. pipeline in Python. This phase verifies model adaptation, synthetic data training, zero-text semantic vector extraction, and modular GGUF / GGML export for mobile `llama.cpp` + Vulkan runtime before porting to Android NDK/C++.
 
 ```
 +---------------------------------------------------------------------------------------------+
 |                                    COLAB PIPELINE FLOW                                      |
 |                                                                                             |
 |  [ Synthetic Indic Data Generator ]                                                         |
-|  - Gemini / GPT API for telephony dialogue scripts (Hinglish/Indian English)                |
+|  - Gemini / GPT API for telephony dialogue scripts (English, Hindi, Kannada, code-mixed)     |
 |  - edge-tts / Indic Parler-TTS batch audio rendering + telephony noise injection           |
 |                                     │                                                       |
 |                                     ▼                                                       |
 |  [ S2S Model Assembly & LoRA Training ]                                                     |
 |  - IndicWhisper / Whisper-small (Audio Ingestion)                                            |
-|  - Qwen3-Omni-0.5B / Qwen2-0.5B Mini-Omni Backbone (Reasoning)                                  |
+|  - Qwen3-Omni-Pruned (1.45B params / 22 layers) Backbone (Passive Reasoner)                 |
 |  - SNAC Neural Audio Codec (Voice Synthesis)                                                |
 |  - Dual-track token interruption fine-tuning                                                |
 |                                     │                                                       |
@@ -754,10 +743,11 @@ Decrypted Vector Trajectory ──► Multi-Vector Soft Prompt ──► Spoken 
 |  - Cryptographic simulation (AES-256-GCM cipher BLOB generation)                            |
 |                                     │                                                       |
 |                                     ▼                                                       |
-|  [ Modular ONNX Export & Quantization ]                                                     |
-|  - Graph 1: whisper_encoder.onnx (FP16 / INT8)                                              |
-|  - Graph 2: qwen2_audio_backbone.onnx (INT4 via ONNX Runtime GenAI)                         |
-|  - Graph 3: snac_decoder.onnx (INT8)                                                        |
+|  [ Modular GGUF Export & llama.cpp Quantization ]                                           |
+|  - Graph 1: whisper_encoder.gguf (Q8_0 / FP16)                                              |
+|  - Graph 2: qwen3_omni_pruned.gguf (Q4_K_M via llama-quantize)                              |
+|  - Graph 3: snac_decoder.gguf (Q8_0 / FP16)                                                 |
+|  - Graph 4: dual_head_vectorizer.gguf (Q8_0 via GGML)                                       |
 +---------------------------------------------------------------------------------------------+
 
 ```
@@ -770,13 +760,13 @@ Decrypted Vector Trajectory ──► Multi-Vector Soft Prompt ──► Spoken 
 
 * **GPU Runtime:** NVIDIA T4 (16 GB VRAM) minimum; NVIDIA A100 (40 GB VRAM) recommended for Stage 3 fine-tuning.
 * **Disk Allocation:** $\ge 50\text{ GB}$ transient disk space.
-* **Storage & Persistence:** GitHub Releases (tag-based artifact storage) via `GITHUB_TOKEN` / `GITHUB_REPO` API calls for persistent dataset, checkpoint, and ONNX storage.
+* **Storage & Persistence:** GitHub Releases (tag-based artifact storage) via `GITHUB_TOKEN` / `GITHUB_REPO` API calls for persistent dataset, checkpoint, and GGUF storage.
 
 #### 2.2 Core Python Libraries & Frameworks
 
 * **Deep Learning Framework:** `torch >= 2.2.0`, `torchaudio >= 2.2.0` (CUDA 12.1 build).
 * **Foundation Backbones & Codecs:** `transformers >= 4.45.0`, `accelerate >= 0.34.0`, `peft >= 0.12.0` (LoRA/QLoRA), `snac` (Multi-scale Neural Audio Codec).
-* **Model Export & Runtime Engine:** `onnx >= 1.16.0`, `onnxruntime-gpu >= 1.19.0`, `optimum[onnxruntime] >= 1.22.0`.
+* **Model Export & Runtime Engine:** `gguf >= 0.10.0`, `llama.cpp` tools (`convert_hf_to_gguf.py`, `llama-quantize`), `onnx >= 1.16.0` (for auxiliary CAM++ diarizer).
 * **Audio Processing & Augmentation:** `librosa >= 0.10.2`, `soundfile >= 0.12.1`, `scipy >= 1.13.0`.
 * **Telemetry & Security Simulation:** `cryptography >= 42.0.0` (AES-256-GCM verification), `numpy >= 1.26.0`.
 
@@ -843,36 +833,32 @@ $$\mathbf{v}_{\text{intent}} = \frac{\mathbf{W}_{\text{proj}} \mathbf{h}_{\text{
 * **Cipher BLOB Generation:**
 Serialize $\mathbf{v}_{\text{intent}}$ into 2,048 bytes of raw binary data. Encrypt via Python `cryptography` using AES-256-GCM. Verify that raw audio buffers and text strings are purged from Python memory using `gc.collect()`.
 
-#### Module E: Multi-Part ONNX Export & Quantization
+#### Module E: Decoupled GGUF Export & `llama.cpp` Vulkan Quantization
 
-To maintain compatibility with mobile NPUs, the system must not be exported as a single monolithic graph. Colab must output three decoupled ONNX graphs:
+To maintain compatibility with mobile Vulkan GPU memory envelopes and allow direct `mmap` zero-copy weight ingestion, the system must not be exported as a monolithic blob. Colab outputs decoupled GGUF artifacts:
 
-| ONNX Artifact Name | Source Sub-Module | Target Format | Quantization Target |
+| Artifact Name | Source Sub-Module | Target Format | Quantization Target |
 | --- | --- | --- | --- |
-| `whisper_encoder.onnx` | Audio Feature Extractor | ONNX Opset 18 | FP16 or INT8 Dynamic |
-| `qwen3_omni_backbone.onnx` | Transformer Core + KV Cache | ONNX Runtime GenAI | **INT4 AWQ / Block-quantized** |
-| `snac_decoder.onnx` | Neural Audio Codec Decoder | ONNX Opset 18 | INT8 Dynamic / Static |
+| `whisper_encoder.gguf` | Audio Feature Extractor | GGUF v3 | `Q8_0` / FP16 (~38 MB) |
+| `qwen3_omni_pruned.gguf` | Pruned Transformer Backbone (22L) | GGUF v3 | **`Q4_K_M`** (~725 MB) |
+| `snac_decoder.gguf` | Neural Audio Codec Decoder | GGUF v3 | `Q8_0` / FP16 (~18 MB) |
+| `dual_head_vectorizer.gguf` | Intent & Prosody Linear Heads | GGUF v3 | `Q8_0` (~420 KB) |
 
 ---
 
 ### 4. Verification & Acceptance Criteria
 
 1. **Inference Latency Profile (Simulated):**
-* Simulated time-to-first-audio-packet on Colab T4 GPU must remain $\le 200\text{ ms}$.
-
+* Simulated time-to-first-audio-packet on Colab T4 GPU must remain $\le 200\text{ ms}$; token generation $\le 25\text{ ms}$/token.
 
 2. **Zero-Text Inspection:**
 * Automated test script must parse generation outputs to confirm that inference routines yield audio token tensors directly, with no intermediate text tokens logged or printed.
 
-
 3. **Retrieval Accuracy:**
 * Cosine similarity between query vectors ($\mathbf{u}_{\text{query}}$) and stored intent vectors ($\mathbf{v}_{\text{intent}}$) must achieve $\ge 0.82$ Mean Reciprocal Rank (MRR) across 100 test call scenarios.
 
-
-4. **ONNX Export Integrity:**
-* Validate all three `.onnx` files using `onnx.checker.check_model()`. Run a forward pass comparison between PyTorch and ONNX Runtime to ensure numerical drift stays within tolerance ($\text{MSE} \le 1\text{e-}3$).
-
-
+4. **GGUF Export & Quantization Integrity:**
+* Validate all GGUF files using `llama.cpp`'s `llama-quantize` verification routines and GGML inspect tools. Run forward pass comparison between PyTorch and `llama.cpp` inference to ensure numerical drift stays within tolerance ($\text{MSE} \le 1\text{e-}3$).
 
 ---
 
@@ -880,18 +866,18 @@ To maintain compatibility with mobile NPUs, the system must not be exported as a
 
 Organize the Colab notebook into 6 sequential sections:
 
-* **Cell Section 1: Environment & GPU Initialization:** GitHub auth configuration (`GITHUB_TOKEN`), CUDA check, pip dependencies installation.
+* **Cell Section 1: Environment & GPU Initialization:** GitHub auth configuration (`GITHUB_TOKEN`), CUDA check, pip dependencies installation (`gguf`, `transformers`, `accelerate`).
 * **Cell Section 2: Synthetic Data Engine:** Automated generation of 1,000 telephony dialogue turns, audio synthesis, acoustic degradation, and dataset packaging/upload to GitHub Releases.
-* **Cell Section 3: Model Architecture Assembly:** Loading Qwen3-Omni-0.5B with Whisper and SNAC heads; setting up LoRA configuration.
+* **Cell Section 3: Model Architecture Assembly:** Loading Qwen3-Omni-Pruned (1.45B) with Whisper and SNAC heads; setting up LoRA configuration.
 * **Cell Section 4: Fine-Tuning & Interruption Training:** 3-epoch training loop optimizing Cross-Entropy loss over SNAC audio tokens, with periodic checkpoint uploads to GitHub Releases.
 * **Cell Section 5: Mathematical Storage & Debrief Simulation:** Vector extraction, AES-256 ciphering verification, and voice debrief retrieval test.
-* **Cell Section 6: ONNX Export & INT4 Quantization:** Decoupling the model into three `.onnx` graphs and uploading artifacts directly to GitHub Releases for Android packaging.
+* **Cell Section 6: GGUF Export & `llama.cpp` Vulkan Quantization:** Decoupling the model into GGUF graphs, applying `Q4_K_M` / `Q8_0` quantization via `llama-quantize`, and uploading artifacts directly to GitHub Releases for Android packaging.
 
 Would you like to generate the complete Python code for the first notebook section—the automated Synthetic Telephony Data Generator?
 
 On Google Colab’s free tier (NVIDIA T4 GPU), the entire end-to-end process takes approximately **3 to 4 hours of total compute time**.
 
-However, because free-tier Colab enforces GPU usage quotas, session timeouts, and idle disconnections, you should budget **3 to 5 calendar days** (working 1.5 to 2 hours per day) to complete dataset creation, model training, and ONNX export without running into GPU lockouts.
+However, because free-tier Colab enforces GPU usage quotas, session timeouts, and idle disconnections, you should budget **3 to 5 calendar days** (working 1.5 to 2 hours per day) to complete dataset creation, model training, and GGUF export without running into GPU lockouts.
 
 ---
 
@@ -903,9 +889,9 @@ However, because free-tier Colab enforces GPU usage quotas, session timeouts, an
 | **2. Audio Synthesis** | `edge-tts` async rendering 2,000 clips | **Colab CPU** (No GPU) | **20 – 35 mins** | Async batching; zero GPU compute consumed. |
 | **3. Audio DSP Augmentation** | Bandpass filter + background noise mix | **Colab CPU** (2 vCPUs) | **10 – 15 mins** | Batch processing using `scipy` and `torchaudio`. |
 | **4. Feature Extraction** | Whisper-small + SNAC tokenization | **T4 GPU** | **15 – 25 mins** | Converts 2,000 clips to discrete token tensors. |
-| **5. Model Fine-Tuning** | QLoRA (4-bit) on Qwen3-Omni-0.5B (3 epochs) | **T4 GPU** | **45 – 75 mins** | ~750 steps with batch size 8 and gradient accumulation. |
+| **5. Model Fine-Tuning** | QLoRA (4-bit) on Qwen3-Omni-Pruned (3 epochs) | **T4 GPU** | **45 – 75 mins** | ~750 steps with batch size 8 and gradient accumulation. |
 | **6. Vector Emulation Test** | Hidden state pooling + AES cipher test | **T4 GPU / CPU** | **5 – 10 mins** | Quick test on 50 validation samples. |
-| **7. ONNX Export & INT4** | Decoupled export of 3 ONNX subgraphs | **T4 GPU / CPU** | **25 – 35 mins** | PyTorch tracing, graph optimization, and quantization. |
+| **7. GGUF Export & Quantization** | `convert_hf_to_gguf.py` + `llama-quantize` | **T4 GPU / CPU** | **15 – 25 mins** | Export to GGUF format and quantize to `Q4_K_M` / `Q8_0`. |
 | **Total** |  |  | **~2.5 to 3.5 Hours** |  |
 
 ---
@@ -918,7 +904,7 @@ To avoid triggering Google Colab’s automated GPU cutoff (which locks you out o
 
 * **Runtime:** Standard **CPU Runtime** (Settings $\to$ Change runtime type $\to$ CPU).
 * Run the API script to generate the 2,000 dialogue scenarios.
-* Batch synthesize speech via `edge-tts` across the Indian English and Hindi voice personas.
+* Batch synthesize speech via `edge-tts` across the Indian English, Hindi, and Kannada voice personas.
 * Run the DSP script to apply telephony filtering and street noise.
 * *GPU Quota Consumed:* **0%**.
 
@@ -926,7 +912,7 @@ To avoid triggering Google Colab’s automated GPU cutoff (which locks you out o
 
 * **Runtime:** Switch to **T4 GPU**.
 * Process audio clips through Whisper-small and SNAC encoders to produce cached `.pt` or `.parquet` token files.
-* Load Qwen3-Omni-0.5B in 4-bit (`bitsandbytes`), attach the LoRA adapter, and run a **10-step dummy training run** to ensure there are no out-of-memory (OOM) errors on batch tensor sizes.
+* Load Qwen3-Omni-Pruned in 4-bit (`bitsandbytes`), attach the LoRA adapter, and run a **10-step dummy training run** to ensure there are no out-of-memory (OOM) errors on batch tensor sizes.
 * *GPU Quota Consumed:* ~20%.
 
 #### Day 3: Full Fine-Tuning Run
@@ -936,12 +922,12 @@ To avoid triggering Google Colab’s automated GPU cutoff (which locks you out o
 * Configure the script to save checkpoints locally and upload them directly to a GitHub Release every 150 steps using `upload_to_github_release()`.
 * *GPU Quota Consumed:* ~50% (well within free-tier daily thresholds).
 
-#### Day 4: Mathematical Vectorization & ONNX Export
+#### Day 4: Mathematical Vectorization & GGUF Export
 
 * **Runtime:** **T4 GPU or High-RAM CPU**.
-* Verify the attention-pooling extraction of the 512-d semantic vector $\mathbf{v}_{\text{intent}}$.
-* Export `whisper_encoder.onnx`, `qwen3_omni_backbone.onnx`, and `snac_decoder.onnx`.
-* Apply INT4 quantization to the Qwen backbone and upload all final ONNX artifacts directly to a GitHub Release for Android packaging.
+* Verify the attention-pooling extraction of the 512-d semantic vector $\mathbf{v}_{\text{intent}}$ and 256-d prosody vector $\mathbf{v}_{\text{prosody}}$.
+* Export `whisper_encoder.gguf`, `qwen3_omni_pruned.gguf`, `snac_decoder.gguf`, and `dual_head_vectorizer.gguf`.
+* Apply `Q4_K_M` quantization to the Qwen backbone and `Q8_0` to the vectorizer heads; upload all final GGUF artifacts directly to a GitHub Release for Android packaging.
 
 ---
 
@@ -960,7 +946,7 @@ To avoid triggering Google Colab’s automated GPU cutoff (which locks you out o
 3. **Upload Checkpoints to GitHub Releases (Avoid Session Loss):**
 * Free Colab sessions can drop unexpectedly if your browser tab goes to sleep. Configure `upload_to_github_release()` after key milestones or every 150 steps so your LoRA adapter weights persist safely on GitHub Releases even if the instance terminates.
 
-To run **Qwen3-Omni-3B** efficiently inside an Android background service, you can perform architectural surgery to strip away components unnecessary for an audio-native debrief and narration engine. By excising the text generation heads, truncating the input vocabulary, and pruning redundant transformer depth, you can cut the model's footprint from **~3.1B parameters down to ~1.4B–1.6B parameters**, shrinking the INT4 binary from **$\sim 1.9\text{ GB}$ to under $750\text{ MB}$**.
+To run **Qwen3-Omni-3B** efficiently inside an Android background service, you can perform architectural surgery to strip away components unnecessary for an audio-native debrief and narration engine. By excising the text generation heads, truncating the input vocabulary, and pruning redundant transformer depth, you can cut the model's footprint from **~3.1B parameters down to ~1.4B–1.6B parameters**, shrinking the Q4_K_M GGUF binary from **$\sim 1.9\text{ GB}$ to under $750\text{ MB}$**.
 
 ```
 [ Original Qwen3-Omni-3B (~3.09B Params) ]
@@ -976,7 +962,7 @@ To run **Qwen3-Omni-3B** efficiently inside an Android background service, you c
   ├── Parallel SNAC Acoustic Heads (~58M params)
   └── Intent Vector Projection Head (2048 -> 512: ~1M params)
                                    │
-                    Quantize to INT4 (AWQ / GPTQ)
+                    Quantize to Q4_K_M (llama-quantize)
                                    │
                                    ▼
               ~725 MB Flash Storage / Android Memory Footprint
@@ -1054,7 +1040,7 @@ $$\mathbf{W}_{\text{proj}} \in \mathbb{R}^{512 \times 2048} \quad (\sim 1.05\tex
 | **Intent Projection Head** | None (0 params) | **~1M params** ($512 \times 2048$) | +1M |
 | **Total Parameter Count** | **~3,090M (3.09B)** | **~1,450M (1.45B)** | **$\approx 53\%$ reduction** |
 | **Unquantized Size (FP16)** | ~6.18 GB | ~2.90 GB | -3.28 GB |
-| **Target Quantized Size (INT4)** | **~1.85 GB – 2.1 GB** | **~725 MB – 780 MB** | **Fits mobile NPU** |
+| **Target Quantized Size (Q4_K_M)** | **~1.85 GB – 2.1 GB** | **~725 MB – 780 MB** | **Fits mobile Vulkan VRAM / unified RAM** |
 
 ---
 
@@ -1179,4 +1165,4 @@ def persist_ciphered_vector(vector_tensor: torch.Tensor, device_master_key: byte
 1. Run the pruning script on Qwen3-Omni-3B to save the stripped base checkpoint (~2.9 GB FP16).
 2. Attach LoRA ($r=32, \alpha=64$) across the 22 remaining layers.
 3. Train on the 2,000 synthetic Indic telephony turns to align the audio adapter and SNAC heads.
-4. Export the resulting model via ONNX Runtime GenAI to INT4 for deployment.
+4. Convert the resulting stripped backbone to GGUF and quantize to `Q4_K_M` via `llama-quantize` for `llama.cpp` Vulkan deployment.

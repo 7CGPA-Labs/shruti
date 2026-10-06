@@ -5,9 +5,10 @@
 ## 1. Document Control & Scope
 
 * **Target Package:** `org.seven_cgpalabs.shruti`
-* **Target Platforms:** Android 14.0+ (API 34 & 35)
-* **ML Runtime:** LiteRT Tri-Tier Runtime (NPU + GPU OpenCL + CPU)
-* **S2S / Debrief Engine:** `Qwen3-Omni-3B` (Pruned to ~1.45B params, quantized via INT4 AWQ)
+* **Target Platforms:** Android 14.0+ (API 34 & 35) (Compatible down to Android 10 / API 29)
+* **ML Runtime:** **`llama.cpp` + GGML (Vulkan GPU + ARM NEON CPU Fallback)**
+* **Model Packaging:** Unified GGUF Format (`Q4_K_M` and `Q8_0`)
+* **S2S / Debrief Engine:** `Qwen3-Omni-3B` (Pruned to ~1.45B params, quantized via Q4_K_M GGUF)
 * **Storage Engine:** Zero-Copy FlatBuffers (`.vecstream`) + SQLCipher v4.5.4 (AES-256-GCM encrypted at rest)
 * **IPC Transport:** Android AIDL / Binder IPC
 * **Native Memory:** C++20 Lockless SPSC Circular Ring Buffer
@@ -16,14 +17,14 @@
 
 ---
 
-## 2. Heterogeneous LiteRT Execution & Debrief Contract
+## 2. llama.cpp & Vulkan (GGUF) Heterogeneous Execution & Debrief Contract
 
 | Subsystem Component | Model Architecture | Parameters | Quantization | Execution Provider (EP) | Memory Footprint | Latency Budget |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Voice Activity Detector** | Silero VAD v5 | 1.8 M | INT8 | CPU (XNNPACK / ARM NEON) | ~2.5 MB | < 2.5 ms / 32ms chunk |
-| **Tier 1 Dual-Head Vectorizer** | Dual-Head Conv1D/GRU | 420 K | INT8 QAT | LiteRT NPU (QNN HTP / NNAPI) | ~418 KB | < 1.8 ms / 500ms chunk |
-| **Tier 2 Semantic Encoder** | Streaming Whisper Tiny | 38 M | INT8 | LiteRT GPU (OpenCL) | ~38 MB | < 18 ms / chunk |
-| **Post-Session SLM Narrator** | Pruned `Qwen3-Omni-3B` | 1.45 B | INT4 AWQ | LiteRT / QNN NPU | ~725 MB | < 25 ms / token |
+| **Voice Activity Detector** | Silero VAD v5 | 1.8 M | INT8 | CPU (ARM NEON) | ~2.5 MB | < 2.5 ms / 32ms chunk |
+| **Tier 1 Dual-Head Vectorizer** | Dual-Head Conv1D/GRU | 420 K | Q8_0 GGUF | Vulkan GPU (`ggml-vulkan`) | ~420 KB | < 1.6 ms / 500ms chunk |
+| **Tier 1 Semantic Audio Encoder**| Streaming Whisper Tiny | 38 M | Q8_0 GGUF | Vulkan GPU (`ggml-vulkan`) | ~38 MB | < 14 ms / chunk |
+| **Post-Session SLM Narrator** | Pruned `Qwen3-Omni-3B` | 1.45 B | Q4_K_M GGUF | `llama.cpp` Vulkan GPU (`-ngl 99`)| ~725 MB | < 22 ms / token |
 
 *Post-Session Expressive Narrative Debrief System Prompt Contract:*
 ```
@@ -40,7 +41,7 @@ System Prompt: "You are S.H.R.U.T.I., an expressive post-session narrator. Analy
 package org.seven_cgpalabs.shruti.ipc;
 
 interface IShrutiAudioPipeline {
-    boolean initializePipeline(in String modelAssetPath);
+    boolean initializePipeline(in String ggufModelPath);
     oneway void pushInboundFrame(in byte[] pcmFrameData, int sampleCount);
     oneway void finalizeSessionAndSerialize(in String sessionUuid);
     oneway void terminateSessionAndScrubMemory();

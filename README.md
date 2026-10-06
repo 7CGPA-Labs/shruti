@@ -3,8 +3,8 @@
 
 [![Android API](https://img.shields.io/badge/Android-14%20%7C%2015%20(API%2034--35)-3DDC84?logo=android&logoColor=white)](#prerequisites--system-requirements)
 [![NDK](https://img.shields.io/badge/NDK-r26c%2B%20(C%2B%2B20)-00599C?logo=c%2B%2B&logoColor=white)](#native-dsp--c-engine)
-[![Runtime](https://img.shields.io/badge/ONNX%20Runtime-Mobile%20v1.19%2B-005CED?logo=onnx&logoColor=white)](#heterogeneous-ml-pipeline)
-[![NPU Backend](https://img.shields.io/badge/Hardware%20NPU-Qualcomm%20QNN%20%7C%20NNAPI-FF3E00)](#heterogeneous-ml-pipeline)
+[![Runtime](https://img.shields.io/badge/llama.cpp-Vulkan%20Compute%20(GGUF)-005CED?logo=c%2B%2B&logoColor=white)](#universal-vulkan--llamacpp-runtime)
+[![GPU Engine](https://img.shields.io/badge/Universal%20GPU-Vulkan%201.1%2B%20(Adreno%20%7C%20Mali)-FF3E00)](#universal-vulkan--llamacpp-runtime)
 [![Privacy](https://img.shields.io/badge/Privacy-Zero--Disk%20Audio%20%2F%20Zero--Text-brightgreen)](#zero-persistence-privacy-invariant)
 [![TRAI Compliance](https://img.shields.io/badge/TRAI-140%20%7C%20160%20%7C%201909%20Compliant-orange)](#trai-regulatory-engine--anti-spam)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
@@ -13,18 +13,18 @@
 
 > **Etymology & Philosophy**  
 > In classical Sanskrit, ***Śruti*** (श्रुति) signifies *"that which is heard"*—knowledge transmitted directly through acoustic perception without written mediation.  
-> **S.H.R.U.T.I.** (Wake-Word: `"Hey Shruti"`) mirrors this philosophy as an on-device, zero-text, audio-native telephony assistant. Powered by **`Qwen3-Omni-3B` (INT4 AWQ)**, it eliminates cascading Speech-to-Text (STT) $\rightarrow$ LLM $\rightarrow$ Text-to-Speech (TTS) pipelines in favor of direct Speech-to-Speech (S2S) discrete token inference executed entirely on local mobile NPU silicon.
+> **S.H.R.U.T.I.** (Wake-Word: `"Hey Shruti"`) mirrors this philosophy as an on-device, zero-text, audio-native telephony assistant. Powered by **`llama.cpp` + Vulkan (Qwen3-Omni-3B GGUF)**, it operates across universal Android smartphone GPUs (Qualcomm Adreno, ARM Mali, Imagination PowerVR, Samsung Xclipse) via standard Khronos Vulkan compute shaders, eliminating closed-source, fragmented NPU vendor SDKs in favor of universal hardware compatibility.
 
 ---
 
 ## Key Highlights
 
 - **Passive In-Call & Ambient Voice Vectorizer:** Operates strictly as a zero-touch passive listener during calls and ambient meetings. The AI never interrupts, intercepts, or converses with callers live; incoming calls use the standard default dialer `[Decline]` / `[Answer]`.
-- **LiteRT Tri-Tier Hardware Execution Pipeline:**
-  - **Tier 1 (NPU - Snapdragon HTP / MTK APU):** INT8 QAT Dual-Head Vectorizer extracts 192-d speaker identity ($e_{\text{speaker}}$) and 64-d prosody/energy dynamics ($z_{\text{prosody}}$) in $< 1.8\text{ ms}$ with static tensor allocation (`1, 50, 80`).
-  - **Tier 2 (GPU - Qualcomm Adreno / ARM Mali via OpenCL):** Streaming Whisper / SLM semantic encoder extracting 128-d semantic intent ($w_{\text{semantic}}$) + 1-d pause delta ($\Delta_{\text{pause}}$) in $< 18\text{ ms}$.
-  - **Tier 3 (CPU - ARM NEON / XNNPACK):** Silero VAD v5 ($< 2.5\text{ ms}$) and lock-free C++ DSP ring buffer.
+- **Universal Vulkan & `llama.cpp` Hardware Execution Pipeline:**
+  - **Tier 1 (GPU - Vulkan Compute via `ggml-vulkan`):** Dual-Head Vectorizer (192-d speaker identity $e_{\text{speaker}}$ + 64-d prosody $z_{\text{prosody}}$) and Streaming Whisper semantic encoder (128-d semantic intent $w_{\text{semantic}}$ + 1-d pause delta $\Delta_{\text{pause}}$) execute in $\le 16\text{ ms}$ compute bursts via SPIR-V shaders over system `libvulkan.so`. Full SLM debrief generation offloaded to Vulkan GPU (`-ngl 99`).
+  - **Tier 2 (CPU - ARM NEON / GGML):** Silero VAD v5 ($< 2.5\text{ ms}$), lock-free C++ DSP ring buffer, and multithreaded ARM NEON CPU fallback if GPU memory is constrained.
 - **Post-Call Expressive Storytelling / Spoken Debrief:** Transforms on-device vector streams into expressive spoken summaries with speaker attribution, dynamic prosody (SSML), and conversational brevity on demand once calls or ambient sessions conclude.
+- **GGUF Model Packaging:** Pruned `Qwen3-Omni-3B` (~1.45B params) quantized to `Q4_K_M` (~725 MB) and `Q8_0` vectorizer weights, ensuring rapid zero-copy memory mapping (`mmap`) and minimal RAM pressure.
 - **Google Play & DoT Policy Compliant:**
   - **Human-in-the-Loop 1909 Intent:** Pre-filled `Intent.ACTION_SENDTO` (`smsto:1909`) for single-tap user SMS confirmation (Play Store `SEND_SMS` policy compliant).
   - **`ROLE_DIALER` Emergency Routing:** Complete dialer client with instant zero-latency pass-through for Emergency numbers (`112` / `911`).
@@ -58,13 +58,13 @@
                         ┌────────────────────────┴────────────────────────┐
                         ▼                                                 ▼
         ┌───────────────────────────────┐                 ┌───────────────────────────────┐
-        │  Silero VAD (CPU / ARM NEON)  │                 │ LiteRT NPU Dual-Head Vector   │
+        │  Silero VAD (CPU / ARM NEON)  │                 │ llama.cpp / GGML Vulkan GPU   │
         │  * Speech chunking (<2.5ms)   │                 │ * 192-d Speaker + 64-d Prosody│
         └───────────────────────────────┘                 └───────────────┬───────────────┘
                                                                           │
                                                                           ▼
                                                           ┌───────────────────────────────┐
-                                                          │ LiteRT GPU (OpenCL) Whisper   │
+                                                          │ GGML Vulkan Whisper Encoder   │
                                                           │ * 128-d Semantic + 1-d Pause  │
                                                           └───────────────┬───────────────┘
                                                                           │
@@ -84,9 +84,9 @@
                                                                           │
                                                                           ▼
                                                           ┌───────────────────────────────┐
-                                                          │ Expressive SLM Debrief Engine │
-                                                          │ * Qwen3-Omni-3B / SSML Prosody│
-                                                          │ * Spoken Story & Key Insights │
+                                                          │ llama.cpp Vulkan SLM Engine   │
+                                                          │ * Qwen3-Omni-3B (Q4_K_M GGUF) │
+                                                          │ * SSML Prosody & Storytelling │
                                                           └───────────────────────────────┘
 ```
 
@@ -96,11 +96,12 @@
 
 ```
 shruti/
- ├── PRD.md                            # Product Requirements Document (v3.0.0)
- ├── TRD.md                            # Technical Requirements Document
- ├── architecture.md                   # System Architecture Specification (v3.0.0)
+ ├── PRD.md                            # Product Requirements Document (v4.0.0)
+ ├── TRD.md                            # Technical Requirements Document (v4.0.0)
+ ├── architecture.md                   # System Architecture Specification (v4.0.0)
  ├── notebooks/
- │    └── dual_head_vectorizer_qat.ipynb# LiteRT INT8 QAT Export & Benchmarks
+ │    ├── dual_head_vectorizer_qat.ipynb# Dual-Head Vectorizer GGML / GGUF Export
+ │    └── shruti_training.ipynb        # Qwen3-Omni Training & GGUF Quantization
  ├── milestone_tasks.md                # 16-Sprint Implementation Roadmap
  ├── ui_design.md                      # Gemini-Style UI/UX & Passive In-Call Spec
  ├── backend_schema.md                 # AIDL, FlatBuffers & SQLCipher DDL Schema
@@ -110,7 +111,7 @@ shruti/
  ├── .github/workflows/build.yml       # GitHub Actions CI/CD Build Pipeline
  └── app/
       ├── build.gradle.kts             # Android application configuration
-      ├── CMakeLists.txt               # NDK build script for C++ DSP engine (-std=c++20)
+      ├── CMakeLists.txt               # NDK build script for C++20 engine & Vulkan
       └── src/
            ├── main/
                 ├── cpp/
@@ -141,11 +142,11 @@ cd shruti
 ### 2. Build Native Engine and Debug APK
 Ensure Android NDK `r26c` and CMake `3.22.1` are installed in your Android SDK environment:
 ```bash
-# Compile native C++20 DSP binaries and debug APK
+# Compile native C++20 DSP binaries and debug APK with Vulkan support
 ./gradlew assembleDebug
 ```
 
-- **Long Multi-Person Conversation & Vector Trajectory Architecture:** Supports 10 to 60+ minute multi-speaker meetings/conversations via CAM++ ONNX speaker diarization, streaming 30-second chunk-and-flush KV-cache management (constant ~450 MB RAM), and Vector Trajectory Matrix ($\mathbf{M}_{\text{session}} \in \mathbb{R}^{K \times 512}$) storage in SQLCipher.
+- **Long Multi-Person Conversation & Vector Trajectory Architecture:** Supports 10 to 60+ minute multi-speaker meetings/conversations via GGML speaker diarization, streaming 30-second chunk-and-flush KV-cache management (constant ~450 MB RAM), and Vector Trajectory Matrix ($\mathbf{M}_{\text{session}} \in \mathbb{R}^{K \times 512}$) storage in SQLCipher.
 
 ---
 
@@ -154,8 +155,8 @@ Ensure Android NDK `r26c` and CMake `3.22.1` are installed in your Android SDK e
 - [Product Requirements Document (PRD)](PRD.md)
 - [Technical Requirements Document (TRD)](TRD.md)
 - [System Architecture Specification](architecture.md)
-- [Dual-Head INT8 QAT Vectorizer Notebook](notebooks/dual_head_vectorizer_qat.ipynb)
-- [Model Training & Surgery Plan](TRAINING_PLAN.md)
+- [Dual-Head Vectorizer GGUF Notebook](notebooks/dual_head_vectorizer_qat.ipynb)
+- [Model Training & GGUF Quantization Plan](TRAINING_PLAN.md)
 - [Implementation Roadmap & Milestones](milestone_tasks.md)
 - [UI/UX Design Specification](ui_design.md)
 - [Backend & System Schema Specification](backend_schema.md)

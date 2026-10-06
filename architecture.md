@@ -6,17 +6,25 @@
 
 * **Project Codename:** S.H.R.U.T.I. (Speech-native Hardware Runtime for Ubiquitous Telephony Intelligence)
 * **Target Package:** `org.seven_cgpalabs.shruti`
-* **Target OS:** Android 14.0 (API 34), Android 15.0 (API 35)
-* **Hardware Tier:** Tier-1 & Tier-2 NPU-equipped SoCs (Snapdragon 8 Gen 2/3/4, Google Tensor G3/G4, MediaTek Dimensity 9200/9300/9400)
-* **Document Version:** 3.0.0 (Passive Vector Ingress & Tri-Tier LiteRT Architecture)
+* **Target OS:** Android 14.0 (API 34), Android 15.0 (API 35) (Compatible down to Android 10 / API 29 via Vulkan 1.1)
+* **Hardware Tier:** **Universal Android Smartphone Coverage via Vulkan 1.1+** (Qualcomm Adreno 6xx/7xx/8xx, ARM Mali-Gxx / Immortalis, Imagination PowerVR, Samsung Xclipse / AMD RDNA2) with multithreaded ARM NEON CPU fallback.
+* **Inference Engine:** **`llama.cpp` + GGML with Vulkan Compute Backend (`ggml-vulkan`)** using unified GGUF binary format.
+* **Document Version:** 4.0.0 (Universal Vulkan & `llama.cpp` Architecture)
 * **Status:** Approved System Architecture
 
-#### 1.1 Architectural Invariant (Passive Listener Only)
+#### 1.1 Why Vulkan + `llama.cpp` Replaces Proprietary NPUs
+While dedicated NPUs (Qualcomm Hexagon/HTP, MediaTek APU, Google Tensor TPU) theoretically offer high efficiency, they introduce severe production bottlenecks on Android:
+1. **Extreme Market Fragmentation:** NPUs are restricted to premium flagships; over 80% of active smartphones (especially in the targeted Indian telecom demographic) lack dedicated NPUs or lack vendor-exposed NPU drivers.
+2. **Proprietary Vendor Lock-in & Closed Firmware:** Qualcomm QNN, MediaTek NeuroPilot, and Samsung ENN require incompatible proprietary binaries, closed toolchains, and distinct compilation targets.
+3. **Android Platform Instability:** Google deprecated Android NNAPI in Android 15, leaving no universal NPU HAL.
+4. **The Universal Vulkan Solution:** **Khronos Vulkan 1.1+ is universally mandatory on all Android 10+ devices**. Standard `libvulkan.so` is available on every device with a modern GPU. Paired with `llama.cpp` (`ggml-vulkan.cpp`), S.H.R.U.T.I. achieves high-performance GPU tensor acceleration with zero proprietary drivers, uniform FP16/INT8/INT4 math, and seamless ARM NEON CPU fallback.
+
+#### 1.2 Architectural Invariant (Passive Listener Only)
 S.H.R.U.T.I. operates strictly as an on-device, passive conversational listener and expressive storyteller. The AI **never answers, speaks to, or intercepts callers live during active telephone calls**. Its operational loop is strictly divided into:
-1. **Passive Real-Time Ingress:** Capturing in-call or ambient speech without disk waveform writes.
-2. **NPU Burst Vectorization:** Converting 1.0s audio tiles into composite math vectors via LiteRT.
+1. **Passive Real-Time Ingress:** Capturing in-call or ambient speech via lock-free C++ DSP ring buffer without disk writes.
+2. **Vulkan GPU Burst Vectorization:** Converting 500ms audio chunks into composite math vectors $v_t \in \mathbb{R}^{384}$ via GGML / Vulkan compute shaders.
 3. **Continuous Diarization:** Online cosine clustering tracking up to 8 speaker centroids in $O(1)$ memory.
-4. **Post-Session Expressive Narration:** Decoding `.vecstream` into an emotionally nuanced, SSML-orchestrated narrative debrief via on-device SLM and system TTS.
+4. **Post-Session Expressive Narration:** Decoding `.vecstream` into an emotionally nuanced, SSML-orchestrated narrative debrief via `llama.cpp` Vulkan SLM and Android system TTS / local Kokoro.
 
 ---
 
@@ -27,16 +35,18 @@ SYSTEM HARDWARE BUS
 ┌──────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                  │
 │    ┌─────────────────────────┐               ┌──────────────────────────────┐    │
-│    │    CPU Efficiency Core  │               │        Hardware NPU          │    │
-│    │      (LITTLE Cluster)   │               │   (Qualcomm QNN / Tensor)    │    │
+│    │    CPU Efficiency Core  │               │        Mobile GPU Silicon    │    │
+│    │      (LITTLE Cluster)   │               │   (Adreno / Mali / Xclipse)  │    │
 │    ├─────────────────────────┤               ├──────────────────────────────┤    │
-│    │ • Sensor Interrupts     │               │ • Silero VAD (INT8)          │    │
-│    │ • Audio Ring Buffering  │               │ • Dual-Head Vectorizer (INT8)│    │
-│    │ • Zero-Crossing Filter  │               │ • Conformer ASR Encoder      │    │
-│    │ • FlatBuffer Serializer │               │ • Gemma-2 2B Narrator (INT4) │    │
+│    │ • Sensor Interrupts     │               │ • Vulkan 1.1+ Compute Shaders│    │
+│    │ • Audio Ring Buffering  │               │ • GGML Vulkan Pipeline       │    │
+│    │ • Silero VAD (ARM NEON) │               │ • Dual-Head Vectorizer (Q8_0)│    │
+│    │ • FlatBuffer Serializer │               │ • Streaming Whisper (Q8_0)   │    │
+│    │ • AES-256 Memory Scrub  │               │ • Qwen3-Omni-3B (Q4_K_M)     │    │
 │    └────────────┬────────────┘               └──────────────▲───────────────┘    │
 │                 │                                           │                    │
-│                 │  Zero-Copy Shared Memory (DMA-BUF / RAM)  │                    │
+│                 │      Zero-Copy Vulkan Shared Memory       │                    │
+│                 │   (VK_EXT_external_memory_dma_buf / AHardwareBuffer)           │
 │                 └───────────────────────────────────────────┘                    │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -46,43 +56,49 @@ SYSTEM HARDWARE BUS
 ### 3. End-to-End Ingress & Vectorization Pipeline
 
 ```
-[ Audio Source (VoIP / InCall / Mic) ]
-                  │
-                  ▼
-       [ AudioIngressService ] ──► [ CPU Energy Filter ]
-                  │
-        ┌─────────┴─────────┐ (Speech Detected)
-        ▼
-[ DirectByteBuffer (1.0s / 16kHz) ]
-        │
-        ▼ (Race-to-Sleep Burst via LiteRT NPU Delegate)
-┌───────────────────────────────────────┐
-│        Hardware Acceleration          │
-│ • VAD Filtering                       │
-│ • 192-d Speaker Embedding (e_speaker) │
-│ • 64-d Prosody/Emotion Vector (z_pro) │
-│ • ASR Semantic Token IDs (w_semantic) │
-└───────────────────┬───────────────────┘
-                    │
-                    ▼
-[ Composite Vector Tuple v_t ] ──► [ Google FlatBuffers ] ──► [ Encrypted .vecstream ]
-                    │
-        ┌───────────┴───────────┐ (Session Concluded)
-        ▼
-[ Two-Tier Identity Resolver ] (ContactsContract + Post-Call SLM Pass)
-        │
-        ▼
-[ On-Device SLM (Gemma 2 2B / Qwen3 INT4) ] ──► Generates Expressive SSML Script
-        │
-        ▼
-[ Android Native TextToSpeech Engine ] (Offline High-Quality Voice / Kokoro Fallback)
+[ Inbound PSTN / Cellular Call ]
+              │
+              ▼ (User Answers Normally - Default Dialer)
+[ AudioIngressEngine (VOICE_COMMUNICATION) ]
+              │
+              ▼ (Raw 16kHz PCM Frames)
+[ Lockless C++20 Ring Buffer (AudioRingBuffer.cpp) ]
+              │
+              ▼ (50-Frame / 500ms Log-Mel Spectrogram)
+┌────────────────────────────────────────────────────────┐
+│         llama.cpp / GGML Vulkan Compute Engine         │
+│  (ggml-vulkan: SPIR-V Compute Shaders over libvulkan)  │
+│                                                        │
+│  • Head A: 192-d Speaker d-vector (e_speaker)          │
+│  • Head B: 64-d Prosody/Energy Vector (z_prosody)      │
+│  • Head C: 128-d Semantic Embedding (w_semantic)       │
+│  • Pause:  1-d Inter-Speech Delta (Δ_pause)            │
+└───────────────────────────┬────────────────────────────┘
+                            │ Composite Vector vt ∈ R^384
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│           Zero-Copy FlatBuffers Serialization          │
+│        (Memory-Mapped .vecstream / AES-256-GCM)        │
+└───────────────────────────┬────────────────────────────┘
+                            │
+               (Call Disconnects / User Query)
+                            │
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│      llama.cpp Vulkan SLM Narrator (Q4_K_M GGUF)       │
+│   • Ingests Decrypted Trajectory Matrix M_session      │
+│   • Generates Expressive Debrief Script with SSML tags │
+└───────────────────────────┬────────────────────────────┘
+                            │
+                            ▼
+[ Android TTS / Kokoro Audio Playback (Speaker Attribution & Emotion) ]
 ```
 
 ---
 
 ### 4. Audio Ingress & Platform Abstraction
 
-To navigate Android 14+ platform limitations (where cellular downlink audio is often isolated by OEM basebands), the ingress layer isolates telephony mechanisms from the vectorizer pipeline.
+To navigate Android platform requirements, the ingress layer isolates telephony mechanisms from the vectorizer pipeline.
 
 ```kotlin
 interface AudioIngressEngine {
@@ -93,7 +109,7 @@ interface AudioIngressEngine {
 
 enum class IngressType {
     VOIP_INTERNAL,           // Built-in WebRTC Engine (Full 2-way digital capture)
-    TELECOM_DOWNLINK_FALLBACK // Native Telecom (MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+    TELECOM_DOWNLINK_PASSIVE // Native Telecom (MediaRecorder.AudioSource.VOICE_COMMUNICATION under ROLE_DIALER)
 }
 ```
 
@@ -137,18 +153,18 @@ class TelecomAudioIngress(private val context: Context) : AudioIngressEngine {
         audioRecord = null
     }
 
-    override fun getStreamType(): IngressType = IngressType.TELECOM_DOWNLINK_FALLBACK
+    override fun getStreamType(): IngressType = IngressType.TELECOM_DOWNLINK_PASSIVE
 }
 ```
 
 ---
 
-### 5. Google FlatBuffers Binary Vector Schema (`vector_frame.fbs`)
+### 5. Google FlatBuffers Binary Vector Schema (`shruti_vector_stream.fbs`)
 
 Conversations are serialized into an append-only binary stream using Google FlatBuffers, eliminating JVM heap allocation and garbage collection overhead.
 
 ```protobuf
-namespace AudioIntelligence;
+namespace org.seven_cgpalabs.shruti.serialization;
 
 struct ProsodyMetrics {
     pitch_hz: float32;       // Fundamental frequency F0
@@ -161,143 +177,145 @@ struct ProsodyMetrics {
 table VectorFrame {
     timestamp_ms: uint64;
     duration_ms: uint16;
-    speaker_cluster_id: uint8;
+    speaker_id: uint8;
     pause_delta_ms: uint16;
-    speaker_embedding: [float32]; // 192-d ECAPA-TDNN vector
-    prosody: ProsodyMetrics;
-    semantic_tokens: [uint16];    // ASR Vocabulary token IDs
+    speaker_embedding: [float32]; // 192-d d-vector
+    prosody_features: [float32];  // 64-d prosody dynamics
+    semantic_embedding: [float32];// 128-d semantic intent
 }
 
-table CallSessionRecord {
-    session_id: string;
-    start_timestamp: uint64;
-    primary_contact_name: string;
-    resolved_participants: [string];
+table ShrutiVectorStream {
+    version: uint32;
+    session_uuid: string;
+    start_epoch_ms: uint64;
+    total_frames: uint32;
     frames: [VectorFrame];
 }
 
-root_type CallSessionRecord;
+root_type ShrutiVectorStream;
 ```
 
 ---
 
-### 6. Tri-Tier Hardware Dispatcher & OpenCL GPU Fallback
+### 6. Universal Vulkan Execution Engine (`llama.cpp` + GGML)
 
-```
-[ 1.0s Audio Chunk (DirectBuffer) ]
-                 │
-                 ▼
-[ Tri-Tier Hardware Dispatcher ]
-                 │
- ┌───────────────┼───────────────┐
- ▼               ▼               ▼
-[ Tier 1: NPU ] [ Tier 2: OpenCL GPU ] [ Tier 3: CPU LITTLE ]
-(QNN / Tensor)  (Adreno / Mali)        (XNNPACK 2-Threads)
-• 12ms Burst    • 28ms Burst           • 85ms Window
-• Zero DRAM Bus • Persistent Kernel    • Core Affinity
-└───────────────┼───────────────┘
-                 ▼
-[ Multi-Vector Output Frame ]
-```
+#### 6.1 Native C++ Vulkan Backend Initialization (NDK Layer)
 
-#### 6.1 Native C++ OpenCL Delegate Configuration (NDK Layer)
+`llama.cpp` initializes the Vulkan backend via `ggml-vulkan.cpp`, using Android's system `libvulkan.so`.
+
 ```cpp
-#include <tensorflow/lite/c/c_api.h>
-#include <tensorflow/lite/delegates/gpu/delegate.h>
+#include "llama.h"
+#include "ggml-vulkan.h"
 #include <android/log.h>
 
-TfLiteDelegate* CreateOpenCLGpuDelegate(const char* cache_dir, const char* model_token) {
-    TfLiteGpuDelegateOptionsV2 options = TfLiteGpuDelegateOptionsV2Default();
-    options.inference_preference = TFLITE_GPU_INFERENCE_PREFERENCE_SUSTAINED_SPEED;
-    options.inference_priority1 = TFLITE_GPU_INFERENCE_PRIORITY_MIN_LATENCY;
-    options.inference_priority2 = TFLITE_GPU_INFERENCE_PRIORITY_MIN_MEMORY_USAGE;
-    options.inference_priority3 = TFLITE_GPU_INFERENCE_PRIORITY_AUTO;
-    
-    // Enable INT8 quantization passthrough on GPU
-    options.experimental_flags |= TFLITE_GPU_EXPERIMENTAL_FLAGS_ENABLE_QUANT;
-    
-    // Set persistent OpenCL binary cache directory to eliminate runtime recompilation stalls
-    options.serialization_dir = cache_dir;
-    options.model_token = model_token;
-    
-    TfLiteDelegate* gpu_delegate = TfLiteGpuDelegateV2Create(&options);
-    return gpu_delegate;
-}
+#define LOG_TAG "ShrutiVulkanEngine"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+class ShrutiVulkanRuntime {
+public:
+    bool initialize(const char* gguf_model_path) {
+        LOGI("Initializing llama.cpp with Vulkan compute backend...");
+
+        // Step 1: Initialize GGML Vulkan backend device
+        ggml_backend_t vk_backend = ggml_backend_vk_init(0); // device index 0
+        if (!vk_backend) {
+            LOGE("Vulkan GPU backend unavailable; falling back to multithreaded CPU NEON");
+            return false;
+        }
+
+        // Step 2: Configure llama model parameters with full GPU offloading
+        llama_model_params model_params = llama_model_default_params();
+        model_params.n_gpu_layers = 99; // Offload all 22 pruned transformer layers to Vulkan GPU
+        model_params.use_mmap = true;   // Zero-copy direct memory mapping from APK/assets
+
+        model_ = llama_load_model_from_file(gguf_model_path, model_params);
+        if (!model_) {
+            LOGE("Failed to load GGUF model from %s", gguf_model_path);
+            return false;
+        }
+
+        // Step 3: Configure llama context parameters
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx_params.n_ctx = 2048;        // Capped context for fast mobile inference
+        ctx_params.n_batch = 512;      // Batch prompt evaluation
+        ctx_params.n_threads = 4;      // CPU worker threads if hybrid execution needed
+
+        ctx_ = llama_new_context_with_model(model_, ctx_params);
+        if (!ctx_) {
+            LOGE("Failed to allocate llama context");
+            return false;
+        }
+
+        LOGI("llama.cpp Vulkan runtime initialized successfully (Model offloaded to GPU)");
+        return true;
+    }
+
+    ~ShrutiVulkanRuntime() {
+        if (ctx_) llama_free(ctx_);
+        if (model_) llama_free_model(model_);
+    }
+
+private:
+    llama_model* model_ = nullptr;
+    llama_context* ctx_ = nullptr;
+};
 ```
 
-#### 6.2 Kotlin Hardware Execution Manager
+#### 6.2 Kotlin Hardware Execution Manager (Vulkan $\to$ CPU Fallback)
+
 ```kotlin
 class HardwareExecutionManager(
     private val context: Context,
-    private val modelBuffer: ByteBuffer,
-    private val modelIdentifier: String
+    private val modelPath: String
 ) {
-    private var interpreter: Interpreter? = null
+    private var nativeEngineHandle: Long = 0L
     private var activeBackend: ExecutionBackend = ExecutionBackend.UNKNOWN
 
-    enum class ExecutionBackend { NPU, GPU_OPENCL, CPU_LITTLE, UNKNOWN }
+    enum class ExecutionBackend { GPU_VULKAN, CPU_NEON, UNKNOWN }
 
     fun initializePipeline(): ExecutionBackend {
-        // TIER 1: Hardware NPU
+        // TIER 1: Universal Mobile GPU via llama.cpp + Vulkan
         try {
-            val npuOptions = Interpreter.Options().apply {
-                addDelegate(NpuDelegate())
-                setNumThreads(1)
-            }
-            interpreter = Interpreter(modelBuffer, npuOptions)
-            activeBackend = ExecutionBackend.NPU
-            return activeBackend
-        } catch (e: Exception) {
-            // NPU delegate unavailable or unsupported ops
-        }
-
-        // TIER 2: GPU via OpenCL
-        try {
-            val compatList = CompatibilityList()
-            if (compatList.isDelegateSupportedOnThisDevice) {
-                val gpuOptions = GpuDelegate.Options().apply {
-                    setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_SUSTAINED_SPEED)
-                    setQuantizedModelsAllowed(true)
-                    val cacheDir = File(context.codeCacheDir, "litert_opencl").apply { mkdirs() }
-                    setSerializationDir(cacheDir.absolutePath)
-                    setModelToken(modelIdentifier)
+            if (isVulkanSupported()) {
+                nativeEngineHandle = nativeInitVulkanEngine(modelPath, useGpu = true)
+                if (nativeEngineHandle != 0L) {
+                    activeBackend = ExecutionBackend.GPU_VULKAN
+                    return activeBackend
                 }
-                val gpuDelegate = GpuDelegate(gpuOptions)
-                val interpreterOptions = Interpreter.Options().apply {
-                    addDelegate(gpuDelegate)
-                }
-                interpreter = Interpreter(modelBuffer, interpreterOptions)
-                activeBackend = ExecutionBackend.GPU_OPENCL
-                return activeBackend
             }
         } catch (e: Exception) {
-            // OpenCL driver context creation failed
+            // Vulkan initialization failed or unsupported driver
         }
 
-        // TIER 3: CPU efficiency cores via XNNPACK
-        val cpuOptions = Interpreter.Options().apply {
-            setUseXNNPACK(true)
-            setNumThreads(2)
-        }
-        interpreter = Interpreter(modelBuffer, cpuOptions)
-        activeBackend = ExecutionBackend.CPU_LITTLE
+        // TIER 2: Multithreaded CPU Fallback via GGML ARM NEON
+        nativeEngineHandle = nativeInitVulkanEngine(modelPath, useGpu = false)
+        activeBackend = ExecutionBackend.CPU_NEON
         return activeBackend
     }
+
+    private fun isVulkanSupported(): Boolean {
+        return context.packageManager.hasSystemFeature(PackageManager.FEATURE_VULKAN_HARDWARE_LEVEL, 1)
+    }
+
+    private external fun nativeInitVulkanEngine(path: String, useGpu: Boolean): Long
 }
 ```
 
 ---
 
-### 7. Race-to-Sleep Burst Scheduling & Thermal Management
+### 7. Race-to-Sleep GPU Burst Scheduling & Thermal Management
 
 ```
-Time (ms)  0               980        1000                    1012            2000
+Time (ms)  0               980        1000                    1016            2000
 CPU (LITTLE) [---- Buffering Audio ----] [ Dispatch Buffer ]   [ Buffering... ]
-NPU Rail     [        SLEEP            ] [ Power ON ] [ Inference ] [ SLEEP   ]
-                                         (12ms burst)
+Vulkan GPU   [        SUSPENDED        ] [ Power ON ] [ Inference ] [ SUSPENDED ]
+                                         (16ms burst)
 ```
 
-#### Dynamic Thermal Throttling
+1. **Compute Burst:** During passive in-call listening, the 500ms audio chunk is dispatched to the Vulkan GPU in a brief $\le 16\text{ ms}$ burst, leaving the GPU idle for $>95\%$ of the interval.
+2. **Thermal Throttling Manager:** Dynamically scales audio chunk batching to maintain device thermals under heavy calling sessions.
+
 ```kotlin
 class ThermalThrottlingManager(context: Context) {
     private val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -333,31 +351,13 @@ For an input speaker embedding $e_t$ at second $t$:
    - Merge the two closest existing clusters, then assign $e_t$.
 
 #### 8.2 Post-Call SLM Name Resolution
-An on-device Small Language Model (Gemma 2 2B / Qwen3 INT4) evaluates dialogue tokens alongside cluster indices to resolve nameless clusters:
-```json
-{
-  "dialogue_events": [
-    {"speaker": "cluster_0", "text": "Good morning, thanks for joining the architecture sync."},
-    {"speaker": "cluster_1", "text": "Hey Gagan, Sarah here. Can you hear me clearly?"},
-    {"speaker": "cluster_0", "text": "Loud and clear, Sarah. Is David coming?"},
-    {"speaker": "cluster_2", "text": "Yes, I'm here too. Sorry for the delay."}
-  ]
-}
-```
-**Resolution Output:**
-```json
-{
-  "cluster_0": "Gagan (User)",
-  "cluster_1": "Sarah",
-  "cluster_2": "David"
-}
-```
+An on-device Small Language Model (pruned `Qwen3-Omni-3B` in Q4_K_M GGUF format) evaluates dialogue tokens alongside cluster indices to resolve nameless clusters into human identities.
 
 ---
 
 ### 9. Expressive Narrative Debriefing Engine
 
-Once names and dialogues are assembled, the on-device SLM formats the debrief into rich Speech Synthesis Markup Language (SSML):
+Once names and dialogues are assembled, the on-device `llama.cpp` Vulkan SLM formats the debrief into rich Speech Synthesis Markup Language (SSML):
 
 ```xml
 <speak>
@@ -370,7 +370,7 @@ Once names and dialogues are assembled, the on-device SLM formats the debrief in
   </prosody>
   <break time="200ms"/>
   <prosody rate="105%" pitch="+2st" volume="loud">
-    "We verified the NPU delegates this morning—zero operator fallbacks across the entire model graph."
+    "We verified the Vulkan compute pipeline this morning—zero driver crashes across all test chipsets."
   </prosody>
   <break time="600ms"/>
   <prosody rate="88%" pitch="-3st">
@@ -378,7 +378,7 @@ Once names and dialogues are assembled, the on-device SLM formats the debrief in
   </prosody>
   <break time="400ms"/>
   <prosody pitch="-2st">
-    "That's great for the Pixel devices... but we're still seeing driver timeouts on legacy chipsets."
+    "That is a massive improvement over the NPU driver fragmentation we saw earlier."
   </prosody>
 </speak>
 ```
@@ -397,19 +397,19 @@ Once names and dialogues are assembled, the on-device SLM formats the debrief in
 [ Haptic Engine: Pulse Ack ] (VibrationEffect.EFFECT_CLICK)
          │
          ▼
-[ Primed Keyword Spotting Window: 15 Sec ] (LiteRT INT8 KWS listening for "Hey Shruti")
+[ Primed Keyword Spotting Window: 15 Sec ] (GGML ARM NEON KWS listening for "Hey Shruti")
          │                           │
          ├─ (Hotword Matched)        └─ (Timeout / No Match)
          ▼                                      ▼
 [ Transition to Active Vectorization ]    [ Return to Deep Sleep ]
 • Start Foreground Service
-• Run NPU Burst Vector Pipeline
+• Run Vulkan Burst Vector Pipeline
 ```
 
 ---
 
 ### 11. Cryptographic Security & Memory Sanitization
 
-1. **Ephemeral RAM Scrubbing:** Every 1.0-second PCM raw audio buffer resides in a native C++ allocation outside the garbage-collected JVM heap. Immediately following LiteRT inference completion, the buffer is explicitly scrubbed using `memset_s(buffer, 0, size)` before the next chunk is read.
+1. **Ephemeral RAM Scrubbing:** Every 1.0-second PCM raw audio buffer resides in a native C++ allocation outside the garbage-collected JVM heap. Immediately following GGML / Vulkan inference completion, the buffer is explicitly scrubbed using `memset_s(buffer, 0, size)` before the next chunk is read.
 2. **At-Rest Encryption:** Vector files (`.vecstream`) are stored in the application's private sandbox (`/data/user/0/<package>/files/vectors/`) and encrypted using the Android Keystore System with an **AES-256-GCM** hardware-backed Master Key.
 3. **Air-Gapped Invariant:** The application manifest strictly excludes `android.permission.INTERNET` from the core ML vectorization and SLM modules, cryptographically assuring that biometric voice vectors and transcripts never leave the device.
